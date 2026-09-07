@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Project-specific ---
+
+# Training/eval run outputs (checkpoints, rollout videos, eval_info.json, logs)
+outputs/
+wandb/
+
+# Downloaded/prepared model checkpoints (large binaries, fetched via scripts/ on demand)
+models/
+*.safetensors
+*.pt
+*.ckpt
+
+# Claude Code local (personal, machine-specific) settings
+.claude/settings.local.json
