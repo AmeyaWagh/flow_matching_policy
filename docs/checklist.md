@@ -47,8 +47,22 @@ with intent — an unchecked item that's actually done is as misleading as the r
         (step 1K) → 0.035 (step 2K) → 0.017 (step 4K) → 0.014 (step 5K), ~35x reduction. Gradient norm
         shrinks in step (6.37 → 0.30) and stays bounded throughout. Zero NaN/Inf/error occurrences in the
         log. `time_embed_scale=1000.0` worked on the first try -- no sweep needed.
-- [ ] **M3 — Nonzero rollout success on PushT**
-  - [ ] `lerobot-eval` against the M2 checkpoint (`--eval.n_episodes=20 --eval.use_async_envs=false`) reports `pc_success > 0`
+- [x] **M3 — Nonzero rollout success on PushT**
+  - [x] Investigated the 5K-step (M2) checkpoint's `pc_success=0` result first: `avg_max_reward=0.626`,
+        individual episodes hit 0.985/0.995 max reward, and a frame-by-frame video check (episode 7)
+        showed the policy pushing the block into near-perfect alignment mid-episode before drifting
+        just outside `gym_pusht`'s 95%-coverage success threshold -- confirmed undertraining, not a bug.
+  - [x] Extended training to 20K steps (`scripts/train_flow_matching.sh 30000 ...`, salvaged from a
+        checkpoint saved just before an unrelated periodic-eval crash -- see `train_flow_matching.sh`'s
+        header comment on `--env_eval_freq=0` vs the broken `--eval.n_episodes=0`)
+  - [x] `scripts/eval_pretrained.sh outputs/train/m3_extended/checkpoints/020000/pretrained_model pusht 20`
+        reports `pc_success=10.0` (2/20 episodes) and `avg_max_reward=0.74` -- real, unambiguous successes
+  - [x] Resumed to the full 30K-step target (`--config_path=.../checkpoints/020000/.../train_config.json
+        --resume=true --steps=30000 --env_eval_freq=0`, continuing rather than restarting from scratch).
+        loss 0.014→0.005, grad norm 0.30→0.14; `pred_path_length`/`pred_path_smoothness` (1.84/0.012)
+        converged to nearly match `gt_path_length`/`gt_path_smoothness` (1.92/0.017) -- the trajectory
+        metrics tracking real learning progress, not just the loss. Re-eval at 30K:
+        `pc_success=15.0` (3/20), `avg_max_reward=0.84` -- improved further over the 20K checkpoint.
 - [ ] **M4 — Full run + side-by-side comparison**
   - [ ] Full `--steps=200000` training run to convergence
   - [ ] `lerobot-eval --eval.n_episodes=50` on both the FM checkpoint and `models/diffusion_pusht_local`

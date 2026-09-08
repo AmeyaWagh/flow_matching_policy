@@ -97,6 +97,16 @@ class FlowMatchingConfig(PreTrainedConfig):
         compile_mode: `torch.compile` mode to use when `compile_model` is True.
         do_mask_loss_for_padding: Whether to mask the loss when there are copy-padded actions. See
             `LeRobotDataset` and `load_previous_and_future_frames` for more information.
+        log_trajectory_metrics: Whether to compute trajectory-quality diagnostics (path length,
+            path smoothness; via `robometric_frame`) and surface them in `forward`'s `output_dict`.
+            `lerobot-train` logs `output_dict` automatically (console + wandb), so this needs no
+            extra wiring. Ground-truth metrics (over `batch[ACTION]`) are cheap and computed every
+            call; predicted-trajectory metrics need extra Euler-ODE sampling passes, so they're
+            gated by `trajectory_metrics_log_freq`.
+        trajectory_metrics_log_freq: How often (in training steps) to additionally sample the model's
+            own predicted trajectory and compute its path length/smoothness, for comparison against
+            the ground-truth values. Only takes effect during training (not the periodic offline
+            eval-loss pass) and when `log_trajectory_metrics` is True.
         optimizer_lr: Learning rate for the Adam optimizer preset.
         optimizer_betas: Adam beta coefficients.
         optimizer_eps: Adam epsilon.
@@ -158,6 +168,10 @@ class FlowMatchingConfig(PreTrainedConfig):
     # Loss computation
     do_mask_loss_for_padding: bool = False
 
+    # Trajectory-quality monitoring (via robometric_frame)
+    log_trajectory_metrics: bool = True
+    trajectory_metrics_log_freq: int = 200
+
     # Training presets
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple = (0.95, 0.999)
@@ -185,6 +199,10 @@ class FlowMatchingConfig(PreTrainedConfig):
             )
         if self.num_inference_steps < 1:
             raise ValueError(f"`num_inference_steps` must be >= 1. Got {self.num_inference_steps}.")
+        if self.trajectory_metrics_log_freq < 1:
+            raise ValueError(
+                f"`trajectory_metrics_log_freq` must be >= 1. Got {self.trajectory_metrics_log_freq}."
+            )
 
         if self.resize_shape is not None and (
             len(self.resize_shape) != 2 or any(d <= 0 for d in self.resize_shape)

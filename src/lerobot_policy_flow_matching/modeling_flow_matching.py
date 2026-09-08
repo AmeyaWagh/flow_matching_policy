@@ -33,6 +33,7 @@ from lerobot.policies.common.flow_matching import euler_integrate, sample_noise,
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionConditionalUnet1d, DiffusionRgbEncoder
 from lerobot.policies.utils import get_device_from_parameters, get_dtype_from_parameters, populate_queues
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
+from robometric_frame import PathLength, PathSmoothness
 from torch import Tensor, nn
 
 from .configuration_flow_matching import FlowMatchingConfig
@@ -140,17 +141,22 @@ class FlowMatchingPolicy(PreTrainedPolicy):
         action = self._queues[ACTION].popleft()
         return action
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, None]:
-        """Run the batch through the model and compute the flow-matching loss for training or validation."""
+    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, float]]:
+        """Run the batch through the model and compute the flow-matching loss for training or validation.
+
+        The returned dict carries trajectory-quality diagnostics (see `FlowMatchingConfig.
+        log_trajectory_metrics`) -- `lerobot-train`'s `update_policy` feeds it straight into its
+        `MetricsTracker`, so these show up in the console/wandb logs alongside `loss` with no extra
+        wiring needed.
+        """
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             for key in self.config.image_features:
                 if self.config.n_obs_steps == 1 and batch[key].ndim == 4:
                     batch[key] = batch[key].unsqueeze(1)
             batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
-        loss = self.flow_matching.compute_loss(batch)
-        # no output_dict so returning None
-        return loss, None
+        loss, metrics = self.flow_matching.compute_loss(batch)
+        return loss, metrics
 
 
 class FlowMatchingModel(nn.Module):
@@ -181,6 +187,11 @@ class FlowMatchingModel(nn.Module):
 
         if config.compile_model:
             self.unet = torch.compile(self.unet, mode=config.compile_mode)
+
+        # Counts training-mode compute_loss() calls, to gate the periodic predicted-trajectory metrics
+        # in _compute_trajectory_metrics -- not part of the model's learned state, so it's a plain
+        # attribute rather than a registered buffer (and simply restarts from 0 on checkpoint resume).
+        self._step_count = 0
 
     # ========= inference  ============
     def conditional_sample(
@@ -277,7 +288,7 @@ class FlowMatchingModel(nn.Module):
 
         return actions
 
-    def compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
+    def compute_loss(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, float]]:
         """Compute the flow-matching MSE loss between the predicted and target velocity fields.
 
         This function expects `batch` to have (at least):
@@ -291,6 +302,11 @@ class FlowMatchingModel(nn.Module):
             "action": (B, horizon, action_dim)
             "action_is_pad": (B, horizon)
         }
+
+        Returns:
+            A tuple `(loss, metrics)`. `metrics` carries trajectory-quality diagnostics (see
+            `FlowMatchingConfig.log_trajectory_metrics`) and is suitable to pass straight through as
+            `PreTrainedPolicy.forward`'s `output_dict`.
         """
         # Input validation.
         assert set(batch).issuperset({OBS_STATE, ACTION, "action_is_pad"})
@@ -323,7 +339,7 @@ class FlowMatchingModel(nn.Module):
         # Run the denoising network to predict the velocity field.
         pred = self.unet(noisy_trajectory, time * self.config.time_embed_scale, global_cond=global_cond)
 
-        loss = F.mse_loss(pred, target_velocity, reduction="none")
+        per_element_loss = F.mse_loss(pred, target_velocity, reduction="none")
 
         # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
         if self.config.do_mask_loss_for_padding:
@@ -334,7 +350,53 @@ class FlowMatchingModel(nn.Module):
                 )
             in_episode_bound = ~batch["action_is_pad"]
             mask = in_episode_bound.unsqueeze(-1)
-            num_valid = mask.sum() * loss.shape[-1]
-            return (loss * mask).sum() / num_valid.clamp_min(1)
+            num_valid = mask.sum() * per_element_loss.shape[-1]
+            loss = (per_element_loss * mask).sum() / num_valid.clamp_min(1)
+        else:
+            loss = per_element_loss.mean()
 
-        return loss.mean()
+        metrics = self._compute_trajectory_metrics(actions, global_cond, bsize)
+
+        return loss, metrics
+
+    def _compute_trajectory_metrics(
+        self, ground_truth_actions: Tensor, global_cond: Tensor, batch_size: int
+    ) -> dict[str, float]:
+        """Trajectory-quality diagnostics for `compute_loss`'s `output_dict` (see its docstring).
+
+        Ground-truth path length/smoothness (over `batch[ACTION]`) are cheap tensor ops on data already
+        in hand, so they're computed every call. The predicted-trajectory versions need
+        `num_inference_steps` extra UNet passes through the Euler-ODE sampler, so they're only computed
+        every `trajectory_metrics_log_freq` training steps (never during the periodic offline eval-loss
+        pass, i.e. only while `self.training`) to keep that overhead amortized rather than paid every step.
+        """
+        if not self.config.log_trajectory_metrics:
+            return {}
+
+        metrics: dict[str, float] = {}
+        device = ground_truth_actions.device
+
+        gt_path_length = PathLength().to(device)
+        gt_path_length.update(ground_truth_actions)
+        metrics["gt_path_length"] = gt_path_length.compute().item()
+
+        gt_path_smoothness = PathSmoothness().to(device)
+        gt_path_smoothness.update(ground_truth_actions)
+        metrics["gt_path_smoothness"] = gt_path_smoothness.compute().item()
+
+        if self.training and self._step_count % self.config.trajectory_metrics_log_freq == 0:
+            with torch.no_grad():
+                predicted_actions = self.conditional_sample(batch_size, global_cond=global_cond)
+
+            pred_path_length = PathLength().to(device)
+            pred_path_length.update(predicted_actions)
+            metrics["pred_path_length"] = pred_path_length.compute().item()
+
+            pred_path_smoothness = PathSmoothness().to(device)
+            pred_path_smoothness.update(predicted_actions)
+            metrics["pred_path_smoothness"] = pred_path_smoothness.compute().item()
+
+        if self.training:
+            self._step_count += 1
+
+        return metrics

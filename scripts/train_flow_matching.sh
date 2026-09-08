@@ -16,10 +16,19 @@
 #   scripts/train_flow_matching.sh                                     # full run: 200000 steps
 #   scripts/train_flow_matching.sh 5000 64 outputs/train/m2_short       # M2 short run
 #   WANDB_ENABLE=true scripts/train_flow_matching.sh 5000
-#   scripts/train_flow_matching.sh 5000 64 outputs/train/m2_short -- --eval.n_episodes=0
+#   scripts/train_flow_matching.sh 30000 64 outputs/train/m3 -- --env_eval_freq=0   # disable periodic in-training eval
 #
 # Anything after a literal `--` is passed through to lerobot-train verbatim (e.g. to override
-# --policy.time_embed_scale, --eval.n_episodes, --save_freq, ...).
+# --policy.time_embed_scale, --save_freq, ...).
+#
+# To disable lerobot's periodic in-training rollout eval, use `--env_eval_freq=0` -- NOT
+# `--eval.n_episodes=0`. The latter looks like it should work but doesn't: EvalConfig.__post_init__
+# auto-computes `eval.batch_size` as `min(cpu_based_default, n_episodes, 64)`, so n_episodes=0 collapses
+# batch_size to 0 too, and the periodic eval (still scheduled at every `env_eval_freq`, default 20000
+# steps) then crashes with `ValueError: n_envs must be at least 1` when it fires -- discovered the hard
+# way after a 20000-step run hit exactly that wall. The checkpoint at that step is unaffected (saved
+# just before the crash), but the crash still kills the process, so 10000 more steps get lost if the
+# target was e.g. 30000. `--env_eval_freq=0` disables the periodic eval outright, cleanly.
 
 set -euo pipefail
 

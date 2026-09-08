@@ -41,9 +41,19 @@ def main() -> None:
         "action": torch.randn(batch_size, config.horizon, 2),
         "action_is_pad": torch.zeros(batch_size, config.horizon, dtype=torch.bool),
     }
-    loss, _ = policy.forward(train_batch)
+    loss, output_dict = policy.forward(train_batch)
     assert torch.isfinite(loss), f"loss is not finite: {loss}"
     print(f"forward() loss: {loss.item():.4f}")
+    print(f"forward() output_dict (eval mode, ground-truth trajectory metrics only): {output_dict}")
+
+    # Trajectory metrics are only sampled from the model's own predictions in train mode (never during
+    # the periodic offline eval-loss pass); trajectory_metrics_log_freq=1 makes it fire every call here.
+    policy.train()
+    policy.config.trajectory_metrics_log_freq = 1
+    _, train_output_dict = policy.forward(dict(train_batch))
+    assert "pred_path_length" in train_output_dict, "expected predicted-trajectory metrics in train mode"
+    print(f"forward() output_dict (train mode, adds predicted-trajectory metrics): {train_output_dict}")
+    policy.eval()
 
     # --- predict_action_chunk(): offline/dataloader-style batch (queues empty) ---
     policy.reset()
