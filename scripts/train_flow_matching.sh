@@ -52,7 +52,7 @@ BATCH_SIZE="${POSITIONAL[1]:-64}"
 OUTPUT_DIR="${POSITIONAL[2]:-outputs/train/flow_matching_pusht}"
 DATASET_REPO_ID="${POSITIONAL[3]:-lerobot/pusht}"
 ENV_TYPE="${POSITIONAL[4]:-pusht}"
-WANDB_ENABLE="${WANDB_ENABLE:-false}"
+WANDB_ENABLE="${WANDB_ENABLE:-true}"
 
 echo "Training flow_matching on ${DATASET_REPO_ID} (env=${ENV_TYPE}): steps=${STEPS} batch_size=${BATCH_SIZE}"
 echo "Output dir: ${OUTPUT_DIR}"

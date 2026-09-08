@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1270" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64707d"/>
+    </marker>
+    <style>
+      .mono { font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace; }
+      .box-title { font-weight: 700; }
+      .arrow { stroke: #64707d; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="1270" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="800" y="36" text-anchor="middle" font-size="24" font-weight="700" fill="#12181f">FlowMatchingPolicy — Architecture</text>
+  <text x="800" y="56" text-anchor="middle" class="mono" font-size="12" fill="#6b7280">src/lerobot_policy_flow_matching/modeling_flow_matching.py</text>
+
+  <!-- Legend -->
+  <g>
+    <rect x="1220" y="62" width="360" height="94" rx="6" fill="#fafafa" stroke="#dcdfe3"/>
+    <rect x="1236" y="76" width="18" height="13" fill="#e8eefc" stroke="#3b5b92"/>
+    <text x="1262" y="86" font-size="12" fill="#33383f">reused from lerobot's DiffusionPolicy</text>
+    <rect x="1236" y="98" width="18" height="13" fill="#e6f5ef" stroke="#227a5b"/>
+    <text x="1262" y="108" font-size="12" fill="#33383f">flow-matching-specific (this package)</text>
+    <rect x="1236" y="120" width="18" height="13" fill="#ffffff" stroke="#9aa1ab" stroke-dasharray="3 2"/>
+    <text x="1262" y="130" font-size="12" fill="#33383f">tensor / intermediate value</text>
+  </g>
+
+  <!-- ============ Shared encoding section ============ -->
+  <text x="800" y="128" text-anchor="middle" font-size="15" font-weight="700" fill="#1a1f29">Observation encoding — shared by training &amp; inference</text>
+  <text x="800" y="146" text-anchor="middle" class="mono" font-size="12" fill="#6b7280">FlowMatchingModel._prepare_global_conditioning()</text>
+
+  <!-- S1: state tensor -->
+  <rect x="280" y="166" width="320" height="52" rx="6" fill="#ffffff" stroke="#9aa1ab" stroke-dasharray="4 3"/>
+  <text x="440" y="188" text-anchor="middle" class="mono box-title" font-size="13" fill="#33383f">observation.state</text>
+  <text x="440" y="206" text-anchor="middle" class="mono" font-size="11" fill="#6b7280">(B, n_obs_steps, state_dim)</text>
+
+  <!-- S2: image tensor -->
+  <rect x="920" y="166" width="320" height="52" rx="6" fill="#ffffff" stroke="#9aa1ab" stroke-dasharray="4 3"/>
+  <text x="1080" y="188" text-anchor="middle" class="mono box-title" font-size="13" fill="#33383f">observation.image[s]</text>
+  <text x="1080" y="206" text-anchor="middle" class="mono" font-size="11" fill="#6b7280">(B, n_obs_steps, n_cam, C, H, W)</text>
+
+  <path class="arrow" d="M1080,218 L1080,244"/>
+
+  <!-- S3: rgb encoder (reused) -->
+  <rect x="920" y="244" width="320" height="72" rx="6" fill="#e8eefc" stroke="#3b5b92"/>
+  <text x="1080" y="264" text-anchor="middle" class="mono box-title" font-size="12.5" fill="#1c2c49">DiffusionRgbEncoder × n_cameras</text>
+  <text x="1080" y="281" text-anchor="middle" class="mono" font-size="11" fill="#1c2c49">ResNet18 → SpatialSoftmax(32 kp) → Linear+ReLU</text>
+  <text x="1080" y="298" text-anchor="middle" font-size="10.5" fill="#3b5b92">reused from lerobot.policies.diffusion.modeling_diffusion</text>
+
+  <path class="arrow" d="M1080,316 L1080,342"/>
+
+  <!-- S4: image features tensor -->
+  <rect x="920" y="342" width="320" height="48" rx="6" fill="#ffffff" stroke="#9aa1ab" stroke-dasharray="4 3"/>
+  <text x="1080" y="362" text-anchor="middle" class="mono box-title" font-size="12.5" fill="#33383f">image_features</text>
+  <text x="1080" y="379" text-anchor="middle" class="mono" font-size="10.5" fill="#6b7280">(B, n_obs_steps, n_cam · feature_dim)</text>
+
+  <!-- connectors into concat -->
+  <path class="arrow" d="M440,218 C440,300 560,300 560,424"/>
+  <path class="arrow" d="M1080,390 C1080,410 1040,410 1040,424"/>
+
+  <!-- S5: concat -->
+  <rect x="460" y="424" width="680" height="56" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="800" y="447" text-anchor="middle" class="mono" font-size="12.5" fill="#0f3d2c">torch.cat([state, image_features, env_state?], dim=-1)</text>
+  <text x="800" y="465" text-anchor="middle" class="mono" font-size="12.5" fill="#0f3d2c">.flatten(start_dim=1)</text>
+
+  <path class="arrow" d="M800,480 L800,504"/>
+
+  <!-- S6: global_cond -->
+  <rect x="650" y="504" width="300" height="48" rx="6" fill="#ffffff" stroke="#33383f" stroke-width="1.5"/>
+  <text x="800" y="525" text-anchor="middle" class="mono box-title" font-size="14" fill="#12181f">global_cond</text>
+  <text x="800" y="542" text-anchor="middle" class="mono" font-size="11" fill="#6b7280">(B, global_cond_dim)</text>
+
+  <!-- split arrows -->
+  <path class="arrow" d="M700,552 C550,580 450,586 400,606"/>
+  <path class="arrow" d="M900,552 C1050,580 1150,586 1200,606"/>
+
+  <!-- divider -->
+  <line x1="800" y1="566" x2="800" y2="1156" stroke="#d0d3d8" stroke-dasharray="6 4"/>
+
+  <!-- ============ Column headers ============ -->
+  <text x="400" y="622" text-anchor="middle" font-size="15" font-weight="700" fill="#1a1f29">Training</text>
+  <text x="400" y="639" text-anchor="middle" class="mono" font-size="11.5" fill="#6b7280">FlowMatchingModel.compute_loss()</text>
+
+  <text x="1200" y="622" text-anchor="middle" font-size="15" font-weight="700" fill="#1a1f29">Inference</text>
+  <text x="1200" y="639" text-anchor="middle" class="mono" font-size="11.5" fill="#6b7280">conditional_sample() → predict_action_chunk() / select_action()</text>
+
+  <!-- ============ TRAINING COLUMN ============ -->
+  <!-- T1 -->
+  <rect x="90" y="656" width="620" height="52" rx="6" fill="#ffffff" stroke="#9aa1ab" stroke-dasharray="4 3"/>
+  <text x="400" y="678" text-anchor="middle" class="mono box-title" font-size="13" fill="#33383f">x_0 = batch[ACTION]</text>
+  <text x="400" y="696" text-anchor="middle" class="mono" font-size="11" fill="#6b7280">(B, horizon, action_dim)  — the clean demonstration trajectory</text>
+
+  <path class="arrow" d="M400,708 L400,732"/>
+
+  <!-- T2a / T2b -->
+  <rect x="90" y="732" width="300" height="66" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="240" y="754" text-anchor="middle" class="mono box-title" font-size="12" fill="#0f3d2c">sample_noise()</text>
+  <text x="240" y="771" text-anchor="middle" class="mono" font-size="11" fill="#0f3d2c">x_1 ~ N(0, I)</text>
+  <text x="240" y="787" text-anchor="middle" class="mono" font-size="10.5" fill="#3d6b57">(B, horizon, action_dim)</text>
+
+  <rect x="410" y="732" width="300" height="66" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="560" y="754" text-anchor="middle" class="mono box-title" font-size="12" fill="#0f3d2c">sample_time_beta()</text>
+  <text x="560" y="771" text-anchor="middle" class="mono" font-size="11" fill="#0f3d2c">t ~ Beta(1.5,1.0)·0.999+0.001</text>
+  <text x="560" y="787" text-anchor="middle" class="mono" font-size="10.5" fill="#3d6b57">(B,)</text>
+
+  <path class="arrow" d="M240,798 C240,816 400,816 400,832"/>
+  <path class="arrow" d="M560,798 C560,816 400,816 400,832"/>
+
+  <!-- T3 -->
+  <rect x="90" y="832" width="620" height="64" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="400" y="855" text-anchor="middle" class="mono" font-size="12.5" fill="#0f3d2c">x_t = t · x_1  +  (1 − t) · x_0        (linear interpolant)</text>
+  <text x="400" y="874" text-anchor="middle" class="mono" font-size="12.5" fill="#0f3d2c">u_t = x_1 − x_0                        (target velocity)</text>
+  <text x="400" y="890" text-anchor="middle" font-size="10.5" fill="#3d6b57">forward process — replaces DiffusionPolicy's DDPM/DDIM add_noise()</text>
+
+  <path class="arrow" d="M400,896 L400,920"/>
+
+  <!-- T4 -->
+  <rect x="90" y="920" width="620" height="80" rx="6" fill="#e8eefc" stroke="#3b5b92"/>
+  <text x="400" y="941" text-anchor="middle" class="mono box-title" font-size="12.5" fill="#1c2c49">DiffusionConditionalUnet1d(x_t, t·time_embed_scale, global_cond)</text>
+  <text x="400" y="959" text-anchor="middle" class="mono" font-size="12" fill="#1c2c49">→ v_θ   predicted velocity   (B, horizon, action_dim)</text>
+  <text x="400" y="977" text-anchor="middle" font-size="10.5" fill="#3b5b92">reused: FiLM-conditioned 1D-conv UNet, down_dims=(512,1024,2048), kernel=5</text>
+  <text x="400" y="992" text-anchor="middle" font-size="10.5" fill="#3b5b92">t is scaled ×1000 before DiffusionSinusoidalPosEmb (built for integer diffusion steps)</text>
+
+  <path class="arrow" d="M400,1000 L400,1024"/>
+
+  <!-- T5 loss -->
+  <rect x="90" y="1024" width="620" height="48" rx="6" fill="#fdf1de" stroke="#b5780a" stroke-width="1.5"/>
+  <text x="400" y="1053" text-anchor="middle" class="mono box-title" font-size="14" fill="#4a3105">loss = MSE(v_θ, u_t).mean()</text>
+
+  <path class="arrow" d="M400,1072 L400,1096"/>
+
+  <!-- TM trajectory metrics -->
+  <rect x="90" y="1096" width="620" height="140" rx="6" fill="#eef6f2" stroke="#227a5b" stroke-dasharray="5 3"/>
+  <text x="400" y="1116" text-anchor="middle" font-size="12" font-weight="700" fill="#123d2d">Trajectory metrics  (robometric_frame, in _compute_trajectory_metrics)</text>
+  <text x="400" y="1134" text-anchor="middle" class="mono" font-size="10.8" fill="#123d2d">every step:  PathLength/PathSmoothness(x_0)  →  gt_path_length, gt_path_smoothness</text>
+  <text x="400" y="1152" text-anchor="middle" class="mono" font-size="10.8" fill="#123d2d">every trajectory_metrics_log_freq steps, training only:</text>
+  <text x="400" y="1170" text-anchor="middle" class="mono" font-size="10.8" fill="#123d2d">conditional_sample(global_cond) → x̂_0</text>
+  <text x="400" y="1188" text-anchor="middle" class="mono" font-size="10.8" fill="#123d2d">PathLength/PathSmoothness(x̂_0) → pred_path_length, pred_path_smoothness</text>
+  <text x="400" y="1220" text-anchor="middle" font-size="10" fill="#3d6b57">logged via forward()'s output_dict → lerobot-train's MetricsTracker → console + wandb, no extra wiring</text>
+
+  <!-- ============ INFERENCE COLUMN ============ -->
+  <!-- I1 -->
+  <rect x="890" y="656" width="620" height="52" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="1200" y="678" text-anchor="middle" class="mono box-title" font-size="13" fill="#0f3d2c">x_1 ~ N(0, I)</text>
+  <text x="1200" y="696" text-anchor="middle" class="mono" font-size="11" fill="#3d6b57">(B, horizon, action_dim)  — the flow-matching prior</text>
+
+  <path class="arrow" d="M1200,708 L1200,732"/>
+
+  <!-- I2 loop -->
+  <rect x="890" y="732" width="620" height="96" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="1200" y="753" text-anchor="middle" class="mono box-title" font-size="12.5" fill="#0f3d2c">euler_integrate()  —  forward-Euler ODE loop × num_inference_steps (10)</text>
+  <text x="1200" y="771" text-anchor="middle" class="mono" font-size="11.5" fill="#0f3d2c">v_t = DiffusionConditionalUnet1d(x_t, t·time_embed_scale, global_cond)</text>
+  <text x="1200" y="788" text-anchor="middle" class="mono" font-size="11.5" fill="#0f3d2c">x_t ← x_t + dt · v_t          dt = −1/10,   t: 1 → 0</text>
+  <text x="1200" y="804" text-anchor="middle" font-size="10.5" fill="#3b5b92">same UNet weights as training (reused, blue) — deterministic ODE, no per-step noise</text>
+  <text x="1200" y="820" text-anchor="middle" font-size="10.5" fill="#3d6b57">replaces DiffusionPolicy's DDPM/DDIM reverse noise_scheduler.step() loop</text>
+
+  <path class="arrow" d="M1200,828 L1200,852"/>
+
+  <!-- I3 -->
+  <rect x="890" y="852" width="620" height="52" rx="6" fill="#ffffff" stroke="#9aa1ab" stroke-dasharray="4 3"/>
+  <text x="1200" y="874" text-anchor="middle" class="mono box-title" font-size="13" fill="#33383f">x̂_0 = x_t at t=0</text>
+  <text x="1200" y="892" text-anchor="middle" class="mono" font-size="11" fill="#6b7280">(B, horizon, action_dim) — full predicted trajectory</text>
+
+  <path class="arrow" d="M1200,904 L1200,928"/>
+
+  <!-- I4 -->
+  <rect x="890" y="928" width="620" height="60" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="1200" y="950" text-anchor="middle" class="mono box-title" font-size="12" fill="#0f3d2c">generate_actions():  slice[n_obs_steps−1 : +n_action_steps]</text>
+  <text x="1200" y="968" text-anchor="middle" class="mono" font-size="11.5" fill="#0f3d2c">→ action chunk   (B, n_action_steps, action_dim)</text>
+
+  <path class="arrow" d="M1200,988 L1200,1012"/>
+
+  <!-- I5 -->
+  <rect x="890" y="1012" width="620" height="80" rx="6" fill="#e6f5ef" stroke="#227a5b"/>
+  <text x="1200" y="1034" text-anchor="middle" class="mono box-title" font-size="12.5" fill="#0f3d2c">select_action():  action queue (maxlen = n_action_steps)</text>
+  <text x="1200" y="1052" text-anchor="middle" class="mono" font-size="11.5" fill="#0f3d2c">refilled via predict_action_chunk() whenever the queue is empty</text>
+  <text x="1200" y="1070" text-anchor="middle" class="mono" font-size="11.5" fill="#0f3d2c">.popleft()  →  1 action  (B, action_dim)  per environment step</text>
+  <text x="1200" y="1086" text-anchor="middle" font-size="10.5" fill="#3d6b57">receding-horizon execution — identical caching scheme to DiffusionPolicy.select_action()</text>
+
+  <!-- Footer caption -->
+  <text x="800" y="1256" text-anchor="middle" class="mono" font-size="11.5" fill="#6b7280">PushT defaults:  n_obs_steps=2 · horizon=64 · n_action_steps=32 · action_dim=2 · state_dim=2 · down_dims=(512,1024,2048) · num_inference_steps=10 · time_embed_scale=1000</text>
+</svg>
