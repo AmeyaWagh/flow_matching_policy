@@ -21,6 +21,7 @@ from pathlib import Path
 
 
 def main() -> None:
+    """Parse CLI args, then log an existing lerobot-eval output_dir's results to wandb."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_dir", type=Path, help="Directory passed as --output_dir to lerobot-eval")
     parser.add_argument("--project", default="lerobot")
@@ -43,7 +44,11 @@ def main() -> None:
         project=args.project,
         name=args.name or args.output_dir.name,
         job_type="eval",
-        config={"policy_path": args.policy_path, "env_type": args.env_type, "output_dir": str(args.output_dir)},
+        config={
+            "policy_path": args.policy_path,
+            "env_type": args.env_type,
+            "output_dir": str(args.output_dir),
+        },
     )
 
     metrics = {
@@ -57,7 +62,7 @@ def main() -> None:
     for video_path in overall.get("video_paths", []):
         wandb.log({"eval/video": wandb.Video(video_path, fps=fps, format="mp4")})
 
-    print(f"Logged to {run.get_url()}")
+    print(f"Logged to {run.get_url()}")  # type: ignore[attr-defined]  # Run.get_url exists at runtime; missing from wandb's stubs
     wandb.finish()
 
 

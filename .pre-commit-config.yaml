@@ -1,0 +1,24 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.3.1
+    hooks:
+      - id: mypy
+        # pre-commit's mypy hook runs in its own isolated venv, so third-party
+        # packages we import (and rely on for type inference) need listing
+        # here explicitly -- otherwise mypy can't see past `import wandb` and
+        # misreports real, existing attributes as undefined.
+        additional_dependencies: ["wandb"]
+
+  - repo: https://github.com/econchick/interrogate
+    rev: 1.7.0
+    hooks:
+      - id: interrogate
+        args: [--config, pyproject.toml]
+        pass_filenames: false

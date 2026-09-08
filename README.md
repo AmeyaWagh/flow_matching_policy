@@ -39,3 +39,17 @@ scripts/eval_pretrained.sh                             # eval + save rollout vid
 `scripts/eval_pretrained.sh [POLICY_PATH] [ENV_TYPE] [N_EPISODES] [OUTPUT_DIR]` wraps `lerobot-eval` and
 defaults to evaluating `models/diffusion_pusht_local` on `pusht` for 10 episodes. Rollout videos are
 saved to `<output_dir>/videos/` automatically (up to 10 episodes) — no extra flags needed.
+
+## Development
+
+Dev tools (ruff, mypy, interrogate, pre-commit) live in the `dev` extra, not the base install:
+
+```bash
+uv sync --extra dev
+uv run pre-commit install       # one-time: runs the checks below on every `git commit`
+uv run pre-commit run --all-files
+```
+
+- **ruff** — lint (`ruff-check`) + format (`ruff-format`)
+- **mypy** — static type checking (`[tool.mypy]` in `pyproject.toml`)
+- **interrogate** — docstring coverage, minimum 80% (`[tool.interrogate]` in `pyproject.toml`)

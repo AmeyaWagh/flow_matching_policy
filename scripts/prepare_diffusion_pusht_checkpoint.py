@@ -33,6 +33,7 @@ REPO_ID = "lerobot/diffusion_pusht"
 
 
 def main() -> None:
+    """Assemble a locally-loadable diffusion_pusht checkpoint at the given output directory."""
     output_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "models/diffusion_pusht_local")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -43,7 +44,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         migrated_dir = Path(tmp) / "migrated"
-        print(f"Running migrate_policy_normalization (expected to warn/crash on the config re-save)...")
+        print("Running migrate_policy_normalization (expected to warn/crash on the config re-save)...")
         import subprocess
 
         subprocess.run(
