@@ -6,15 +6,21 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.3.1
+  # `repo: local` + `language: system` runs the `mypy` already installed in this project's own venv
+  # (via the `dev` extra), instead of pre-commit's usual isolated per-hook venv. That isolated venv
+  # would need every runtime dependency (torch, lerobot, einops, ...) listed under
+  # `additional_dependencies` to type-check anything meaningfully -- without them, unresolved imports
+  # silently fall back to `Any` and real type errors go uncaught (and even `wandb`-specific checks
+  # would drift depending on whatever version pip resolves fresh into that isolated venv, since we
+  # can't pin it via `pyproject.toml`/`uv.lock` the way we do for our own venv).
+  - repo: local
     hooks:
       - id: mypy
-        # pre-commit's mypy hook runs in its own isolated venv, so third-party
-        # packages we import (and rely on for type inference) need listing
-        # here explicitly -- otherwise mypy can't see past `import wandb` and
-        # misreports real, existing attributes as undefined.
-        additional_dependencies: ["wandb"]
+        name: mypy
+        entry: mypy
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
 
   - repo: https://github.com/econchick/interrogate
     rev: 1.7.0

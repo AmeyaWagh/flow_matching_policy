@@ -62,7 +62,7 @@ def main() -> None:
     for video_path in overall.get("video_paths", []):
         wandb.log({"eval/video": wandb.Video(video_path, fps=fps, format="mp4")})
 
-    print(f"Logged to {run.get_url()}")  # type: ignore[attr-defined]  # Run.get_url exists at runtime; missing from wandb's stubs
+    print(f"Logged to {run.get_url()}")
     wandb.finish()
 
 
