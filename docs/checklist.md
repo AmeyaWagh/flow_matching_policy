@@ -69,9 +69,13 @@ with intent — an unchecked item that's actually done is as misleading as the r
         `pred_path_length`/`gt_path_length` converged to 1.984/1.923)
   - [x] `lerobot-eval --eval.n_episodes=50` on both the FM checkpoint and `models/diffusion_pusht_local`:
         FM `pc_success=32.0` (16/50), diffusion `pc_success=62.0` (31/50) -- diffusion ahead at equal
-        training steps, explained by its ~10x more inference-time sampling steps (100 DDPM vs. 10 Euler),
-        not a correctness issue (both reward distributions are coherent, not degenerate; see
-        `comparison_pusht.md`)
+        training steps; not a correctness issue (both reward distributions are coherent, not degenerate;
+        see `comparison_pusht.md`)
+  - [x] Tested the obvious "more inference steps closes the gap" hypothesis directly
+        (`--policy.num_inference_steps=100` on the same checkpoint, no retraining needed) -- it does not
+        hold: `pc_success` dropped to 24.0% (12/50) at 100 steps vs. 32.0% at the default 10. Ruled out
+        "diffusion just gets more refinement steps" as a full explanation; see `comparison_pusht.md`'s
+        "Reading the gap" section for the leading (unconfirmed) hypothesis
   - [x] `scripts/eval_compare.py` written and verified against both eval runs; also accepts wandb run
         references (URL or `entity/project/run_id`) as either/both source, verified local-vs-local,
         wandb-vs-wandb, and mixed

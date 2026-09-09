@@ -20,19 +20,41 @@
 # Set WANDB_ENABLE=true to turn this on; requires `wandb login` beforehand.
 #
 # Usage:
-#   scripts/eval_pretrained.sh [POLICY_PATH] [ENV_TYPE] [N_EPISODES] [OUTPUT_DIR]
+#   scripts/eval_pretrained.sh [POLICY_PATH] [ENV_TYPE] [N_EPISODES] [OUTPUT_DIR] [-- EXTRA_ARGS...]
 #
 # Examples:
 #   scripts/eval_pretrained.sh
 #   scripts/eval_pretrained.sh models/diffusion_pusht_local pusht 10 outputs/eval/diffusion_pusht
 #   WANDB_ENABLE=true scripts/eval_pretrained.sh
+#   scripts/eval_pretrained.sh outputs/train/m4_full2/checkpoints/last/pretrained_model pusht 50 \
+#     outputs/eval/m4_flow_matching_ode100 -- --policy.num_inference_steps=100
+#
+# Anything after a literal `--` is passed through to lerobot-eval verbatim. This is how to override a
+# saved checkpoint's policy config at eval time (e.g. --policy.num_inference_steps=N) without retraining --
+# num_inference_steps only controls how many Euler-integration steps conditional_sample() takes at
+# inference; it's not baked into the trained weights.
 
 set -euo pipefail
 
-POLICY_PATH="${1:-models/diffusion_pusht_local}"
-ENV_TYPE="${2:-pusht}"
-N_EPISODES="${3:-10}"
-OUTPUT_DIR="${4:-outputs/eval/$(basename "$POLICY_PATH")}"
+POSITIONAL=()
+EXTRA_ARGS=()
+FOUND_SEP=false
+for arg in "$@"; do
+  if [ "$arg" = "--" ]; then
+    FOUND_SEP=true
+    continue
+  fi
+  if [ "$FOUND_SEP" = true ]; then
+    EXTRA_ARGS+=("$arg")
+  else
+    POSITIONAL+=("$arg")
+  fi
+done
+
+POLICY_PATH="${POSITIONAL[0]:-models/diffusion_pusht_local}"
+ENV_TYPE="${POSITIONAL[1]:-pusht}"
+N_EPISODES="${POSITIONAL[2]:-10}"
+OUTPUT_DIR="${POSITIONAL[3]:-outputs/eval/$(basename "$POLICY_PATH")}"
 WANDB_ENABLE="${WANDB_ENABLE:-true}"
 
 echo "Evaluating policy=${POLICY_PATH} env=${ENV_TYPE} n_episodes=${N_EPISODES}"
@@ -44,7 +66,8 @@ lerobot-eval \
   --eval.n_episodes="${N_EPISODES}" \
   --eval.batch_size="${N_EPISODES}" \
   --eval.use_async_envs=false \
-  --output_dir="${OUTPUT_DIR}"
+  --output_dir="${OUTPUT_DIR}" \
+  "${EXTRA_ARGS[@]}"
 
 if [ "${WANDB_ENABLE}" = "true" ]; then
   python "$(dirname "${BASH_SOURCE[0]}")/log_eval_to_wandb.py" "${OUTPUT_DIR}" \
