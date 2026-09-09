@@ -1,0 +1,59 @@
+[project]
+name = "lerobot_policy_flow_matching"
+version = "0.1.0"
+description = "Flow Matching imitation-learning policy, pluggable into HuggingFace lerobot (lerobot-train/lerobot-eval)."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.12"
+dependencies = [
+    "lerobot[pusht,training,diffusion]>=0.6.1,<0.7",
+    "robometric-frame>=0.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "interrogate>=1.7",
+    "mypy>=2.3",
+    "pre-commit>=4.6",
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+src = ["src", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = ["^tests/"]
+
+[tool.interrogate]
+fail-under = 80
+ignore-nested-functions = true
+exclude = ["tests", ".venv"]
