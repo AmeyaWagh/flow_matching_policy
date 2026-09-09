@@ -63,11 +63,19 @@ with intent — an unchecked item that's actually done is as misleading as the r
         converged to nearly match `gt_path_length`/`gt_path_smoothness` (1.92/0.017) -- the trajectory
         metrics tracking real learning progress, not just the loss. Re-eval at 30K:
         `pc_success=15.0` (3/20), `avg_max_reward=0.84` -- improved further over the 20K checkpoint.
-- [ ] **M4 — Full run + side-by-side comparison**
-  - [ ] Full `--steps=200000` training run to convergence
-  - [ ] `lerobot-eval --eval.n_episodes=50` on both the FM checkpoint and `models/diffusion_pusht_local`
-  - [ ] `scripts/eval_compare.py` written (diffs the two `eval_info.json` files)
-  - [ ] Results + repro commands written to `docs/comparison_pusht.md`
+- [x] **M4 — Full run + side-by-side comparison**
+  - [x] Full `--steps=200000` training run to convergence (`outputs/train/m4_full2`, 4h19m, 200000/200000
+        steps, 13.25 steps/s throughout, no interruption; loss 0.487→0.001, grad norm 6.37→0.094;
+        `pred_path_length`/`gt_path_length` converged to 1.984/1.923)
+  - [x] `lerobot-eval --eval.n_episodes=50` on both the FM checkpoint and `models/diffusion_pusht_local`:
+        FM `pc_success=32.0` (16/50), diffusion `pc_success=62.0` (31/50) -- diffusion ahead at equal
+        training steps, explained by its ~10x more inference-time sampling steps (100 DDPM vs. 10 Euler),
+        not a correctness issue (both reward distributions are coherent, not degenerate; see
+        `comparison_pusht.md`)
+  - [x] `scripts/eval_compare.py` written and verified against both eval runs; also accepts wandb run
+        references (URL or `entity/project/run_id`) as either/both source, verified local-vs-local,
+        wandb-vs-wandb, and mixed
+  - [x] Results + repro commands + analysis written to `docs/comparison_pusht.md`
 
 ## Phase 4 — Generalization (stretch, after PushT is solid)
 

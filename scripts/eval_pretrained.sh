@@ -33,7 +33,7 @@ POLICY_PATH="${1:-models/diffusion_pusht_local}"
 ENV_TYPE="${2:-pusht}"
 N_EPISODES="${3:-10}"
 OUTPUT_DIR="${4:-outputs/eval/$(basename "$POLICY_PATH")}"
-WANDB_ENABLE="${WANDB_ENABLE:-false}"
+WANDB_ENABLE="${WANDB_ENABLE:-true}"
 
 echo "Evaluating policy=${POLICY_PATH} env=${ENV_TYPE} n_episodes=${N_EPISODES}"
 echo "Output dir: ${OUTPUT_DIR} (rollout videos land in ${OUTPUT_DIR}/videos/)"
