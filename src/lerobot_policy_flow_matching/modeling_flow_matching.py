@@ -19,8 +19,9 @@ Reuses `DiffusionRgbEncoder` and `DiffusionConditionalUnet1d` directly from
 `lerobot.policies.diffusion.modeling_diffusion` (safe to import without pulling in `diffusers` -- that
 dependency only lives behind `DiffusionPolicy.__init__`/`_make_noise_scheduler`, never inside the
 encoder/UNet classes themselves) and swaps the DDPM/DDIM forward-diffusion + reverse `.step()` loop for the
-linear-interpolant forward process + forward-Euler ODE reverse loop from
-`lerobot.policies.common.flow_matching`. See `docs/plan.md` for the full design rationale.
+linear-interpolant forward process (from `lerobot.policies.common.flow_matching`) plus a configurable
+fixed-step ODE reverse loop (see `ode_solvers.py`, dispatched by `FlowMatchingConfig.ode_solver`). See
+`docs/plan.md` for the full design rationale.
 """
 
 from collections import deque
@@ -29,7 +30,7 @@ import einops
 import torch
 import torch.nn.functional as F  # noqa: N812
 from lerobot.policies import PreTrainedPolicy
-from lerobot.policies.common.flow_matching import euler_integrate, sample_noise, sample_time_beta
+from lerobot.policies.common.flow_matching import sample_noise, sample_time_beta
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionConditionalUnet1d, DiffusionRgbEncoder
 from lerobot.policies.utils import get_device_from_parameters, get_dtype_from_parameters, populate_queues
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
@@ -37,6 +38,7 @@ from robometric_frame import PathLength, PathSmoothness
 from torch import Tensor, nn
 
 from .configuration_flow_matching import FlowMatchingConfig
+from .ode_solvers import integrate as integrate_ode
 
 
 class FlowMatchingPolicy(PreTrainedPolicy):
@@ -220,7 +222,9 @@ class FlowMatchingModel(nn.Module):
         def denoise_fn(x_t: Tensor, t: Tensor) -> Tensor:
             return self.unet(x_t, t * self.config.time_embed_scale, global_cond=global_cond)
 
-        return euler_integrate(denoise_fn, sample, num_steps=self.config.num_inference_steps)
+        return integrate_ode(
+            self.config.ode_solver, denoise_fn, sample, num_steps=self.config.num_inference_steps
+        )
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         """Encode image features and concatenate them all together along with the state vector."""

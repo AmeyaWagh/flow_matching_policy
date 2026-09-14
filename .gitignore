@@ -231,3 +231,4 @@ models/
 
 # Claude Code local (personal, machine-specific) settings
 .claude/settings.local.json
+.claude/agents/

@@ -13,9 +13,11 @@ except ImportError as e:
 
 from .configuration_flow_matching import FlowMatchingConfig
 from .modeling_flow_matching import FlowMatchingPolicy
+from .ode_solvers import ODE_SOLVERS
 from .processor_flow_matching import make_flow_matching_pre_post_processors
 
 __all__ = [
+    "ODE_SOLVERS",
     "FlowMatchingConfig",
     "FlowMatchingPolicy",
     "make_flow_matching_pre_post_processors",
