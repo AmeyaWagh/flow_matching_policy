@@ -1,114 +1,160 @@
 # Flow Matching vs. Diffusion Policy — PushT comparison (M4)
 
-## Results
-
-Both policies evaluated through the identical `lerobot-eval` harness (`eval_policy_all`), same task
-(`--env.type=pusht`), same episode count (`--eval.n_episodes=50`), same default seed (1000),
-`--eval.use_async_envs=false` on both (see `CLAUDE.md`'s "Known workarounds").
+## Headline result
 
 | | Flow Matching (ours) | `lerobot/diffusion_pusht` |
 |---|---:|---:|
-| Training steps | 200,000 | 200,000 (pretrained checkpoint) |
+| Training steps | **50,000** | 200,000 (shipped checkpoint is the 175k one, selected by periodic eval) |
 | Inference steps per action chunk | **10** (forward-Euler ODE) | ~100 (DDPM) |
-| `pc_success` | **32.0%** (16/50) | **62.0%** (31/50) |
-| `avg_max_reward` | 0.777 | 0.965 |
-| `avg_sum_reward` | 87.72 | 116.76 |
-| Eval wall-clock per episode | **0.73 s** | 1.12 s |
+| `pc_success` | **69.0%** (138/200 episodes, 95% CI [62.6, 75.4]) | 65.4% (500 episodes, HF model card) / 62.0% (50 episodes, our local eval) |
+| `avg_max_reward` | 0.971 | 0.955 (model card) / 0.965 (local) |
+| Eval wall-clock per episode | **0.65 s** | 1.12 s |
 
-Reproduce:
+At 1/4 of the baseline's training budget and 1/10 of its sampling steps, the Flow Matching policy matches
+the diffusion baseline's published success rate (the baseline's 65.4% sits inside our 95% CI). Reproduce:
+
 ```bash
-scripts/eval_pretrained.sh outputs/train/m4_full2/checkpoints/last/pretrained_model pusht 50 outputs/eval/m4_flow_matching
-scripts/eval_pretrained.sh models/diffusion_pusht_local pusht 50 outputs/eval/m4_diffusion_baseline
+lerobot-eval --policy.path=outputs/train/e4b_dropnlf7/checkpoints/050000/pretrained_model \
+  --env.type=pusht --eval.n_episodes=200 --eval.batch_size=50 --eval.use_async_envs=false \
+  --output_dir=outputs/eval/e4b_step050000_nas16_n200
 ```
-wandb runs: [m4_flow_matching](https://wandb.ai/ameya555-ieee/lerobot/runs/a4gew556),
-[m4_diffusion_baseline](https://wandb.ai/ameya555-ieee/lerobot/runs/7qa42c2d).
+wandb: [e4b_step050000_nas16_n200](https://wandb.ai/ameya555-ieee/lerobot/runs/113nyoss) (eval),
+[mwwcfwtk](https://wandb.ai/ameya555-ieee/lerobot/runs/mwwcfwtk) (training).
 
-The table above was generated with `scripts/eval_compare.py`, which accepts either local
-`lerobot-eval --output_dir=...` directories or wandb run references (URL or `entity/project/run_id`) for
-each side, so it works from either source without needing the local `outputs/eval/` files to still exist:
-```bash
-python scripts/eval_compare.py outputs/eval/m4_flow_matching outputs/eval/m4_diffusion_baseline
-python scripts/eval_compare.py \
-  https://wandb.ai/ameya555-ieee/lerobot/runs/a4gew556 \
-  https://wandb.ai/ameya555-ieee/lerobot/runs/7qa42c2d \
-  --label-a flow_matching --label-b diffusion_pusht
-```
+**Caveat, stated up front:** this is not yet an equal-budget head-to-head. Ours is 50k steps with a
+fully-annealed cosine schedule; the baseline is 200k. lerobot's `CosineDecayWithWarmupSchedulerConfig.build()`
+auto-scales `num_decay_steps` down to the actual run length when `steps < num_decay_steps`, so a 50k run is a
+*complete* run, not a truncated prefix of a 200k one — the two are not directly comparable step-for-step, and
+a 200k Flow Matching run is still outstanding. See "Open items".
 
-## Reading the gap
+## How we got here: the original M4 comparison was wrong in two ways
 
-At equal training budget, diffusion's success rate is roughly double ours. Two things are worth separating
-here: whether this reflects a *bug* in the Flow Matching implementation, and whether it reflects a *real,
-expected* trade-off of the design choices made.
+The first M4 comparison reported Flow Matching at 32.0% vs. diffusion at 62.0% and concluded "correct but
+less sample-efficient." Both halves of that conclusion turned out to be artifacts of configuration, not of
+the generative process. Two separate causes, found in order:
 
-**Not a bug.** The per-episode reward distributions for both policies are coherent, not degenerate:
+### 1. The two policies were not architecture-matched (E1)
 
-- **Flow Matching** (`max_reward`, sorted): a genuine bimodal spread — roughly a third of episodes fail
-  outright (0–0.7), a chunk land as near-misses (0.9–0.99, the same "pushes the block into place but
-  doesn't hold the exact 95%-coverage threshold" pattern visually confirmed back at M3), and 16 episodes
-  are clean 1.0 successes.
-- **Diffusion**: the same shape, shifted toward success — a handful of clear failures (0.52–0.73), a
-  similar near-miss band (0.95–0.999), and 31 clean 1.0s.
+The first comparison claimed "the one deliberate difference between the two policies is the generative
+process." That was false. `FlowMatchingConfig` faithfully mirrored lerobot 0.6's *current* `DiffusionConfig`
+defaults, but the `lerobot/diffusion_pusht` checkpoint was trained under the *older* ones:
 
-Neither distribution looks like noise or a broken policy; both look like "the same task, solved with
-different reliability." This is also consistent with everything upstream of this eval: the M2→M3→M4
-training curves showed smooth, monotonic loss decrease (0.487→0.001) with no instability, and the
-trajectory-quality metrics (`gt_path_length`/`pred_path_length`: 1.923/1.984 at the final step, `gt_path_smoothness`/`pred_path_smoothness`:
-0.017/0.013) show the model's own predicted action trajectories converged to closely match the
-ground-truth demonstration trajectories' shape statistics — independent evidence that training converged
-correctly, not just that the loss number went down.
-
-**A real difference in generative process — but not the simple story.** The one deliberate difference
-between the two policies is the generative process (10 Euler-integration steps vs. ~100 DDPM steps), so the
-obvious hypothesis was that giving Flow Matching more sampling steps — cheap to test, since
-`num_inference_steps` is a pure inference-time knob on the *same trained weights*, no retraining needed —
-would close some of the gap. We tested this directly and **it did not hold**:
-
-| | `num_inference_steps=10` | `num_inference_steps=100` |
+| | diffusion_pusht (baseline) | FM, original M4 run |
 |---|---:|---:|
-| `pc_success` | **32.0%** (16/50) | **24.0%** (12/50) |
-| `avg_max_reward` | 0.777 | 0.725 |
-| `avg_sum_reward` | 87.72 | 81.32 |
-| Eval wall-clock per episode | 0.73 s | 0.94 s |
+| `horizon` | 16 | 64 |
+| `n_action_steps` (open-loop execution) | 8 | **32** |
+| `crop_shape` | [84, 84] random crop | **None** (no augmentation at all) |
+| `use_group_norm` / `pretrained_backbone_weights` | True / None | **False / ImageNet** |
+
+Sweeping `n_action_steps` at eval time on the *same, unmodified* M4 weights (50 episodes each):
+
+| `n_action_steps` | 4 | 8 | 16 | 32 (as evaluated originally) |
+|---|---:|---:|---:|---:|
+| `pc_success` | 6.0% | 52.0% | **56.0%** | 36.0% |
+| `avg_max_reward` | 0.595 | 0.883 | 0.899 | 0.793 |
+
+wandb: [nas4](https://wandb.ai/ameya555-ieee/lerobot/runs/04pozifd),
+[nas8](https://wandb.ai/ameya555-ieee/lerobot/runs/1a2ehh8r),
+[nas16](https://wandb.ai/ameya555-ieee/lerobot/runs/paxmis34),
+[nas32](https://wandb.ai/ameya555-ieee/lerobot/runs/tdk9kxbz).
+
+A single inference-time flag moved success from 36% to 56% — so most of the original "FM is half as good"
+gap was an execution-horizon mismatch. The curve has an interior optimum: `n_action_steps=4` *collapses* to
+6% despite the highest `avg_sum_reward` of the sweep, the signature of replanning so often that the policy
+chatters between modes (each replan draws an independent noise sample). 8 and 16 are statistically tied at
+n=50; 16 is now the default.
+
+### 2. Training was not actually converging — and then a config "fix" made it much worse (E2, E4, E4b)
+
+Evaluating the original run's saved checkpoints (50 episodes each, `n_action_steps=32`) showed the success
+rate was **flat** while the training loss fell 8x:
+
+| steps | 25k | 50k | 100k | 150k | 200k |
+|---|---:|---:|---:|---:|---:|
+| `pc_success` | 24.0% | 24.0% | 22.0% | 22.0% | 32.0% |
+| train loss | 0.0111 | 0.0070 | 0.0042 | 0.0024 | 0.0014 |
+
+(wandb: [lf3916bs](https://wandb.ai/ameya555-ieee/lerobot/runs/lf3916bs),
+[m4spxzv4](https://wandb.ai/ameya555-ieee/lerobot/runs/m4spxzv4),
+[nltscnyx](https://wandb.ai/ameya555-ieee/lerobot/runs/nltscnyx),
+[gvhbvzwi](https://wandb.ai/ameya555-ieee/lerobot/runs/gvhbvzwi),
+[r8ejg326](https://wandb.ai/ameya555-ieee/lerobot/runs/r8ejg326).) Run-to-run noise at n=50 is about ±5pp —
+measured by repeating one identical eval and getting 52% then 58% — so essentially all of that variation is
+noise. **175k of the 200k steps bought nothing measurable**: with no image augmentation and no held-out loss,
+train loss was not a usable proxy for rollout success.
+
+Fixing that (E4) — `crop_shape=(84,84)` random crop, `use_group_norm=True`,
+`pretrained_backbone_weights=None`, `n_action_steps=16` — while *also* changing
+`drop_n_last_frames` from 7 to 47 produced a **catastrophic regression**:
+
+| E4 checkpoint / `n_action_steps` | 25k / 16 | 25k / 8 | 50k / 16 | 50k / 8 |
+|---|---:|---:|---:|---:|
+| `pc_success` | 10.0% | 8.0% | **2.0%** | 6.0% |
+| `avg_max_reward` | 0.891 | 0.793 | 0.855 | 0.772 |
+
+The failure had a distinctive signature: **20 of 50 episodes piled into `max_reward` ∈ [0.90, 0.95)** — a
+wall just below the success threshold — and the run posted the *highest* `avg_sum_reward` ever recorded here
+(141). (In lerobot's PushT, success ⟺ `max_reward == 1.0` exactly; verified across 150 episodes.) The policy
+parked the block near-aligned for the whole episode and never closed the last few percent of coverage.
+
+The cause was visible in the *training* logs, not the eval: `train/gt_path_length` — a ground-truth data
+statistic — jumped from 1.916 to **2.419** (+26%) between the two runs. Only `drop_n_last_frames` can change
+the training window distribution like that. With 47, ~40% of each ~125-frame PushT episode is removed from
+`EpisodeAwareSampler`'s start indices, so the terminal fine-alignment phase is only ever seen at chunk
+positions 17–64 and never at 0–15 — the only slice receding-horizon execution ever runs.
+
+Ablation (E4b): identical to E4 but `drop_n_last_frames=7`. `train/gt_path_length` returned to 1.916, and
+in-training rollout eval (n=50) went **52.0% @ 25k → 62.0% @ 50k**, monotonic, versus E4's 10% → 2%
+collapse. The 200-episode eval of that checkpoint is the 69.0% headline above.
+
+**`drop_n_last_frames = horizon - n_action_steps - n_obs_steps + 1` is wrong.** That formula comes from the
+original diffusion-policy config (16/8/2 → 7) and does not generalize to `horizon=64`. lerobot's own
+`DiffusionConfig` also still ships 7 alongside `horizon=64`/`n_action_steps=32`; the comment claiming the
+formula is stale upstream too. The value is now pinned at 7 with this reasoning recorded in
+`configuration_flow_matching.py`.
+
+## Confirmed configuration
+
+`n_obs_steps=2`, `horizon=64`, `n_action_steps=16`, `drop_n_last_frames=7`, `crop_shape=(84,84)` with
+`crop_is_random=True`, `use_group_norm=True`, `pretrained_backbone_weights=None`, `down_dims=(512,1024,2048)`,
+`num_inference_steps=10`, `time_embed_scale=1000.0`, `time_sampling_alpha/beta=1.5/1.0`, batch 64, AdamW
+preset with cosine decay + 500 warmup steps. Train with:
 
 ```bash
-scripts/eval_pretrained.sh outputs/train/m4_full2/checkpoints/last/pretrained_model pusht 50 \
-  outputs/eval/m4_flow_matching_ode100 -- --policy.num_inference_steps=100
+scripts/train_flow_matching.sh 50000 64 outputs/train/fm_pusht -- \
+  --env_eval_freq=25000 --save_freq=25000 --eval.n_episodes=50
 ```
-wandb run: [m4_flow_matching_ode100](https://wandb.ai/ameya555-ieee/lerobot/runs/i1d28jkd).
 
-10x more Euler steps made success *rate* worse, not better (though the reward distribution is still
-coherent — a real spread from 0 to 1.0, not degenerate, so this isn't a crash or a broken policy either).
-This rules out "diffusion just gets more refinement steps" as a full explanation for the gap. A more likely
-mechanism: with only 10 discrete Euler steps, each step's learned-velocity error gets averaged over a large
-`dt`, which can act like an implicit smoothing/regularizer on an imperfectly-learned vector field; at finer
-integration (`dt` small), the sampler faithfully follows every local wiggle in that same imperfect vector
-field instead of averaging over it, amplifying model error rather than reducing discretization error. This
-"more steps isn't strictly better for an imperfectly-trained flow model" pattern shows up elsewhere in the
-flow-matching/diffusion-distillation literature; it hasn't been independently confirmed here beyond this
-one data point, so treat it as the leading hypothesis, not an established fact. `num_inference_steps=10`
-(the config default used throughout M2–M4 training and eval) is retroactively validated as a reasonable
-choice, not an under-tuned one.
+## Inference-step count: more is not better
 
-## What might close the gap (not required for this milestone, noted for future work)
+Tested on the original M4 weights: `num_inference_steps=100` scored **24.0%** vs **32.0%** at the default 10
+(wandb [i1d28jkd](https://wandb.ai/ameya555-ieee/lerobot/runs/i1d28jkd)) — 10x more Euler steps made it
+worse. The likely mechanism is the training-time sampler: `t ~ Beta(1.5, 1.0)` has CDF `t^1.5`, so
+P(t<0.1) = 3.2% and P(t<0.01) = 0.1%. lerobot's `euler_integrate` steps `time = 1 + step·dt`, so with 10
+steps the lowest velocity query is at `t=0.1` — exactly where training data ends — while 100 steps spends
+10% of its compute at `t < 0.1`, a region the model barely saw. This has not been independently confirmed
+(one data point, and it predates the config fixes); it is the leading hypothesis, not an established fact.
 
-- **Sweep intermediate step counts** (e.g. 15, 20, 30, 50) rather than assuming monotonic improvement —
-  given the 10-vs-100 result, the relationship between step count and quality is not "more is better," so
-  there may be a non-monotonic optimum, or 10 may already be at/near it.
-- **Longer training / different LR schedule.** Diffusion's checkpoint is a mature, independently-tuned
-  release; ours is a single 200K-step run with pi0-inherited defaults (`time_sampling_alpha/beta`,
-  `time_embed_scale`) never swept for this architecture.
-- **`time_embed_scale` sensitivity.** Flagged as a design risk from the start (see `plan.md`) and never
-  swept in practice, since the default worked cleanly on the first try at every milestone so far — but
-  the 10-vs-100 result is a reminder that "worked on the first try" isn't the same as "tuned."
+## Open items
+
+- **Full 200k-step run for an equal-budget head-to-head.** The current 69% comes from a 50k run; the
+  baseline is 200k. Because the LR schedule auto-scales, a 200k run is a genuinely different run, not an
+  extension, so the result cannot be extrapolated. Recipe to match the baseline: batch 64,
+  `--env_eval_freq=25000 --save_freq=25000 --eval.n_episodes=50`, best-checkpoint selection by rollout
+  (the baseline itself ships its 175k checkpoint, not its 200k one). ~4h20m on an RTX 4090.
+- **Remaining headroom is in the near-miss band.** In the 200-episode eval, 51 episodes landed in
+  `max_reward` ∈ [0.95, 1.0) — near-misses, not failures (only 7 episodes scored below 0.8). Closing those
+  is worth more than anything else on this list.
+- **Re-test `num_inference_steps`** (and uniform vs. Beta time sampling) on the fixed config; the 10-vs-100
+  result above was measured on the old, broken-augmentation checkpoint.
+- **`time_embed_scale` has still never been swept** — the default worked on the first try at every
+  milestone, which is not the same as tuned.
 
 ## Conclusion
 
-The Flow Matching policy is a **correct, working implementation** — same architecture as `DiffusionPolicy`
-apart from the generative process, verified end-to-end via unit tests, training-curve monotonicity, and
-independent trajectory-quality convergence — that currently trails the mature diffusion baseline on raw
-success rate at equal training steps. The gap is *not* fully explained by inference step count (we tested
-and ruled out the obvious "just add more Euler steps" fix — see above); the remaining likely levers are
-training-side (longer runs, hyperparameter sweeps on `time_sampling_*`/`time_embed_scale`), not a simple
-inference-time knob. Per the original plan: the goal here was a fair, correct comparison, not necessarily
-beating diffusion — that bar is met, and the reward distributions on both sides (coherent, non-degenerate,
-with real successes and real near-misses) support "correct but less sample-efficient so far" over "broken."
+The Flow Matching policy matches the `lerobot/diffusion_pusht` baseline's published PushT success rate
+(69.0% ± 6.4 over 200 episodes vs. 65.4% over 500) at a quarter of the training steps and a tenth of the
+sampling steps per action chunk, with ~1.7x faster rollouts. The architecture is unchanged from
+`DiffusionPolicy` apart from the generative process; every gap found between the two policies during M4
+traced to configuration (execution horizon, image augmentation, and the `drop_n_last_frames` sampler bug),
+not to flow matching itself. An equal-budget 200k-step comparison is still outstanding.

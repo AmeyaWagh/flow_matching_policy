@@ -120,7 +120,7 @@ class FlowMatchingConfig(PreTrainedConfig):
     # Inputs / output structure.
     n_obs_steps: int = 2
     horizon: int = 64
-    n_action_steps: int = 32
+    n_action_steps: int = 16
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -130,19 +130,36 @@ class FlowMatchingConfig(PreTrainedConfig):
         }
     )
 
-    # The original diffusion-policy implementation doesn't sample frames for the last 7 steps,
-    # which avoids excessive padding and leads to improved training results. Kept identical here.
-    drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
+    # Number of end-of-episode frames excluded as window *start* indices by lerobot's
+    # `EpisodeAwareSampler`, to avoid training on excessively padded action targets.
+    #
+    # Keep this at 7. It is NOT `horizon - n_action_steps - n_obs_steps + 1` (= 47 at the current
+    # defaults), despite what older comments here and in lerobot claimed: that formula dates from the
+    # original diffusion-policy config (horizon=16, n_action_steps=8, n_obs_steps=2 -> 7) and does not
+    # generalize to horizon=64. lerobot's own `DiffusionConfig` likewise still ships 7 alongside
+    # horizon=64 / n_action_steps=32.
+    #
+    # Measured, not assumed: a 50k-step run with 47 collapsed PushT rollout success to 2-10% (50 eps)
+    # while an otherwise-identical run with 7 reached 62% -- see `docs/comparison_pusht.md` (E4/E4b).
+    # With 47, ~40% of each ~125-frame PushT episode is removed from the sampler's start indices, so the
+    # terminal fine-alignment phase is only ever seen in chunk positions 17-64 and never in positions
+    # 0-15, which is the only slice receding-horizon execution ever runs. The symptom was a pile-up of
+    # episodes just below the success threshold (20/50 in max_reward [0.90, 0.95)) rather than an
+    # outright-broken policy.
+    drop_n_last_frames: int = 7
 
     # Architecture / modeling.
     # Vision backbone.
     vision_backbone: str = "resnet18"
     resize_shape: tuple[int, int] | None = None
     crop_ratio: float = 1.0
-    crop_shape: tuple[int, int] | None = None
+    crop_shape: tuple[int, int] | None = (84, 84)
     crop_is_random: bool = True
-    pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
-    use_group_norm: bool = False
+    # `use_group_norm=True` requires training the backbone from scratch (see `DiffusionRgbEncoder`):
+    # replacing BatchNorm with GroupNorm in a pretrained backbone would ruin its pretrained weights.
+    # `lerobot/diffusion_pusht` itself uses this combination (pretrained_backbone_weights=None).
+    pretrained_backbone_weights: str | None = None
+    use_group_norm: bool = True
     spatial_softmax_num_keypoints: int = 32
     use_separate_rgb_encoder_per_camera: bool = True
     # UNet.

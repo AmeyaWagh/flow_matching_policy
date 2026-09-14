@@ -81,6 +81,44 @@ with intent — an unchecked item that's actually done is as misleading as the r
         wandb-vs-wandb, and mixed
   - [x] Results + repro commands + analysis written to `docs/comparison_pusht.md`
 
+## Phase 3b — M4 follow-up: the 32%-vs-62% gap was configuration, not flow matching
+
+The M4 conclusion above ("correct but less sample-efficient") did not survive follow-up. Full writeup and
+all wandb links in `comparison_pusht.md`; summary of what changed and why:
+
+- [x] **E1 — `n_action_steps` was mismatched against the baseline.** The M4 comparison claimed the only
+      difference between the two policies was the generative process; pulling both configs showed the FM
+      run used lerobot 0.6's *current* `DiffusionConfig` defaults (`horizon=64`, `n_action_steps=32`,
+      no crop, `use_group_norm=False`) while the `diffusion_pusht` checkpoint predates them (16/8,
+      84x84 crop, GroupNorm). Eval-time sweep on the *unmodified* M4 weights, 50 episodes each:
+      `n_action_steps` 4/8/16/32 → 6.0% / 52.0% / 56.0% / 36.0%. One inference-time flag recovered
+      36%→56%; the curve has an interior optimum (4 collapses).
+- [x] **E2 — training success rate was flat from 25k to 150k** while train loss fell 8x
+      (24/24/22/22/32% at 25k/50k/100k/150k/200k, 50 eps each; measured run-to-run noise ±5pp).
+      With no image augmentation and no held-out loss, train loss was not a proxy for rollout success.
+- [x] **E4 — crop + GroupNorm + from-scratch backbone + `n_action_steps=16`, bundled with
+      `drop_n_last_frames` 7→47: catastrophic regression** (2–10% over four 50-episode evals), with a
+      distinctive pile-up of 20/50 episodes in `max_reward` ∈ [0.90, 0.95).
+- [x] **E4b — isolated the cause: `drop_n_last_frames=47`.** `train/gt_path_length` (a ground-truth data
+      statistic) had jumped 1.916→2.419, proving the training window distribution changed. Re-running E4
+      with `drop_n_last_frames=7` restored it to 1.916 and gave 52.0% @25k → 62.0% @50k (n=50, monotonic).
+      `drop_n_last_frames = horizon - n_action_steps - n_obs_steps + 1` is a stale formula from the
+      original 16/8/2 config — lerobot's own `DiffusionConfig` also still ships 7 with `horizon=64`.
+      Pinned at 7 in `configuration_flow_matching.py` with the evidence recorded inline.
+- [x] **Corrected result: 69.0% over 200 episodes** (95% CI [62.6, 75.4]) at **50k** steps, vs. the
+      baseline's published 65.4% over 500 episodes at 200k steps — parity at 1/4 the training budget and
+      1/10 the sampling steps, with ~1.7x faster rollouts.
+- [x] Confirmed defaults folded into `configuration_flow_matching.py`: `n_action_steps=16`,
+      `drop_n_last_frames=7`, `crop_shape=(84,84)`, `use_group_norm=True`,
+      `pretrained_backbone_weights=None`.
+- [ ] **Equal-budget 200k-step run** for a clean head-to-head (baseline recipe: batch 64,
+      `--env_eval_freq=25000 --save_freq=25000 --eval.n_episodes=50`, best-checkpoint selection).
+      Not a continuation of the 50k run: lerobot's `CosineDecayWithWarmupSchedulerConfig.build()`
+      auto-scales `num_decay_steps` to the actual run length, so the 50k run is a complete annealed run
+      and its result does not extrapolate. ~4h20m on the RTX 4090.
+- [ ] Re-test `num_inference_steps` and uniform-vs-Beta time sampling on the fixed config (the earlier
+      10-vs-100 result was measured on the old, unaugmented checkpoint).
+
 ## Phase 4 — Generalization (stretch, after PushT is solid)
 
 - [ ] Confirm a second lerobot env/dataset (e.g. ALOHA) works with only `--dataset.repo_id`/`--env.type`
