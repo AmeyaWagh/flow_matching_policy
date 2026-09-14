@@ -28,6 +28,7 @@ def test_field_defaults():
     assert config.down_dims == (512, 1024, 2048)
     assert config.diffusion_step_embed_dim == 128
     assert config.num_inference_steps == 10
+    assert config.ode_solver == "euler"
     assert config.time_sampling_alpha == 1.5
     assert config.time_sampling_beta == 1.0
     assert config.time_embed_scale == 1000.0
@@ -86,6 +87,12 @@ def test_num_inference_steps_must_be_positive():
     """__post_init__ rejects a non-positive num_inference_steps."""
     with pytest.raises(ValueError, match="num_inference_steps"):
         make_config(num_inference_steps=0)
+
+
+def test_ode_solver_must_be_known():
+    """__post_init__ rejects an ode_solver name not in ode_solvers.ODE_SOLVERS."""
+    with pytest.raises(ValueError, match="ode_solver"):
+        make_config(ode_solver="not_a_real_solver")
 
 
 def test_delta_indices():

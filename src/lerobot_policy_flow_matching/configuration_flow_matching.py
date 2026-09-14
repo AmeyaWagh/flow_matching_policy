@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from lerobot.configs import NormalizationMode, PreTrainedConfig
 from lerobot.optim import AdamConfig, CosineDecayWithWarmupSchedulerConfig
 
+from .ode_solvers import ODE_SOLVERS
+
 
 @PreTrainedConfig.register_subclass("flow_matching")
 @dataclass
@@ -78,7 +80,11 @@ class FlowMatchingConfig(PreTrainedConfig):
         use_film_scale_modulation: FiLM (https://huggingface.co/papers/1709.07871) is used for the UNet
             conditioning. Bias modulation is used by default; this also enables scale modulation.
         gradient_checkpointing: Whether to checkpoint the UNet residual blocks during training.
-        num_inference_steps: Number of forward-Euler ODE steps to use at inference time.
+        num_inference_steps: Number of ODE solver steps to use at inference time.
+        ode_solver: Name of the fixed-step ODE solver used to integrate the learned velocity field from
+            t=1 (noise) to t=0 (actions) -- one of `ode_solvers.ODE_SOLVERS` ("euler", "heun", "rk4").
+            Higher-order solvers call the UNet more than once per step (2x for "heun", 4x for "rk4"), so
+            they cost proportionally more compute at equal `num_inference_steps`.
         time_sampling_alpha: Alpha parameter of the Beta(alpha, beta) distribution used to sample training
             timesteps (openpi/pi0 convention).
         time_sampling_beta: Beta parameter of the Beta(alpha, beta) distribution used to sample training
@@ -172,6 +178,7 @@ class FlowMatchingConfig(PreTrainedConfig):
 
     # Flow matching.
     num_inference_steps: int = 10
+    ode_solver: str = "euler"
     time_sampling_alpha: float = 1.5
     time_sampling_beta: float = 1.0
     time_sampling_scale: float = 0.999
@@ -216,6 +223,8 @@ class FlowMatchingConfig(PreTrainedConfig):
             )
         if self.num_inference_steps < 1:
             raise ValueError(f"`num_inference_steps` must be >= 1. Got {self.num_inference_steps}.")
+        if self.ode_solver not in ODE_SOLVERS:
+            raise ValueError(f"`ode_solver` must be one of {sorted(ODE_SOLVERS)}. Got {self.ode_solver!r}.")
         if self.trajectory_metrics_log_freq < 1:
             raise ValueError(
                 f"`trajectory_metrics_log_freq` must be >= 1. Got {self.trajectory_metrics_log_freq}."
