@@ -13,10 +13,22 @@ def test_field_defaults():
     config = make_config()
     assert config.n_obs_steps == 2
     assert config.horizon == 64
-    assert config.n_action_steps == 32
+    # 16, not lerobot's current default of 32: an eval-time sweep on identical weights scored
+    # 6/52/56/36% for n_action_steps 4/8/16/32 on PushT (see docs/comparison_pusht.md, E1).
+    assert config.n_action_steps == 16
+    # 7, NOT `horizon - n_action_steps - n_obs_steps + 1` (= 47). 47 collapses PushT success to 2-10%;
+    # see the extended rationale in configuration_flow_matching.py and comparison_pusht.md (E4/E4b).
+    assert config.drop_n_last_frames == 7
+    # Matches the lerobot/diffusion_pusht recipe: random-crop augmentation + a from-scratch GroupNorm
+    # backbone (GroupNorm and pretrained weights are mutually exclusive in DiffusionRgbEncoder).
+    assert config.crop_shape == (84, 84)
+    assert config.crop_is_random is True
+    assert config.use_group_norm is True
+    assert config.pretrained_backbone_weights is None
     assert config.down_dims == (512, 1024, 2048)
     assert config.diffusion_step_embed_dim == 128
     assert config.num_inference_steps == 10
+    assert config.ode_solver == "euler"
     assert config.time_sampling_alpha == 1.5
     assert config.time_sampling_beta == 1.0
     assert config.time_embed_scale == 1000.0
@@ -39,7 +51,9 @@ def test_validate_features_requires_matching_image_shapes():
         input_features={
             "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(2,)),
             "observation.image.top": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 96, 96)),
-            "observation.image.side": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64)),
+            # Both shapes must stay >= the default (84, 84) crop, or the crop-fit check fires first
+            # and this test stops exercising the shape-mismatch check it is named after.
+            "observation.image.side": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 88, 88)),
         }
     )
     with pytest.raises(ValueError, match="does not match"):
@@ -73,6 +87,12 @@ def test_num_inference_steps_must_be_positive():
     """__post_init__ rejects a non-positive num_inference_steps."""
     with pytest.raises(ValueError, match="num_inference_steps"):
         make_config(num_inference_steps=0)
+
+
+def test_ode_solver_must_be_known():
+    """__post_init__ rejects an ode_solver name not in ode_solvers.ODE_SOLVERS."""
+    with pytest.raises(ValueError, match="ode_solver"):
+        make_config(ode_solver="not_a_real_solver")
 
 
 def test_delta_indices():
