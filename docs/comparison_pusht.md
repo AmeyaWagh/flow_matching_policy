@@ -185,14 +185,97 @@ steps the lowest velocity query is at `t=0.1` — exactly where training data en
 10% of its compute at `t < 0.1`, a region the model barely saw. This has not been independently confirmed
 (one data point, and it predates the config fixes); it is the leading hypothesis, not an established fact.
 
+## ODE solver: euler dominates heun and rk4 at matched compute — keep the default
+
+`ode_solvers.py` ships three fixed-step solvers (`euler`, `heun`, `rk4`) selectable via
+`FlowMatchingConfig.ode_solver`. Higher-order solvers call the UNet more per step (heun 2x, rk4 4x), so the
+fair axis is **NFE = number of denoise_fn calls**, not `num_inference_steps`. All evals below are on the
+175k checkpoint, n=200 episodes (n=100 for the two convergence-check rows). euler@NFE10 is the 73.5% headline.
+
+| solver | `num_inference_steps` | NFE | `pc_success` | 95% CI | `avg_max_reward` |
+|---|---:|---:|---:|---|---:|
+| euler | 10 | 10 | **73.5%** | [67.4, 79.6] | 0.928 |
+| euler | 5 | 5 | 61.5% | [54.8, 68.2] | 0.906 |
+| euler | 4 | 4 | 64.0% | [57.3, 70.7] | 0.914 |
+| heun | 5 | 10 | 7.0% | [3.5, 10.5] | 0.813 |
+| heun | 3 | 6 | 2.0% | [0.1, 3.9] | 0.677 |
+| heun | 2 | 4 | 0.0% | [0.0, 0.0] | 0.497 |
+| rk4 | 3 | 12 | 29.0% | [22.7, 35.3] | 0.896 |
+| rk4 | 2 | 8 | 9.0% | [5.0, 13.0] | 0.801 |
+| rk4 | 1 | 4 | 1.5% | [0.0, 3.2] | 0.607 |
+
+**At every matched NFE, higher-order solvers are drastically worse** (heun@NFE10 7.0% vs. euler@NFE10 73.5%,
+z = -13.6, p < 1e-10; likewise rk4). No solver dominates euler anywhere, least of all at low NFE where a
+higher-order win would matter for latency. **The default stays `euler`.**
+
+**This is not a solver bug — it was ruled out two ways.** (1) On a synthetic smooth velocity field, both
+heun and rk4 are strictly *more* accurate than euler at matched step count (rk4@5 error 0.011 vs. euler@5
+error 0.64), confirming the implementations are correct classical integrators. (2) On the real policy, heun
+*converges to euler's result as steps grow* — `num_inference_steps` 5 → 20 → 40 gives 7% → 53% → 71%,
+approaching euler@40's 76% — which is exactly what a consistent solver must do, so the low-NFE collapse is a
+property of the *learned field*, not the code.
+
+The mechanism: heun and rk4 spend their extra UNet calls evaluating the velocity at *predicted, off-path*
+points (`x + dt·v`, `x + dt/2·k`, ...). During training the network only ever saw on-path samples
+`x_t = t·noise + (1-t)·action`, so its velocity is only reliable near that manifold; a large-`dt` predictor
+step lands off it, the corrector reads an unreliable velocity there, and averaging makes the step *worse*
+than the plain euler march that never leaves the manifold. Only once `dt` is small enough that the predicted
+point stays near-path (num_steps ≳ 40, i.e. NFE ≳ 80) does heun recover — at 8x euler's cost for no benefit.
+This is the same reason diffusion samplers use purpose-built solvers (DPM-Solver et al.) rather than generic
+RK4. Repro: `scripts/eval_pretrained.sh <ckpt> pusht 200 <out> -- --policy.ode_solver=heun --policy.num_inference_steps=5`.
+
+These 11 solver evals are logged to wandb as `m4b_175k_{solver}_nfe{N}` and `conv_*` (also stored under
+`outputs/eval/m4b_175k_*` / `outputs/eval/conv_*`); `scripts/log_solver_sweep_to_wandb.sh` re-pushes them.
+
+### Follow-up (E5): off-path training jitter does not rescue higher-order solvers — and hurts euler
+
+Hypothesis: if the field is only reliable *on* the interpolant path, train it to be reliable in a
+*neighborhood* of the path. The `path_noise_std` config field adds isotropic Gaussian jitter of that std to
+the training-time point `x_t` before the UNet, keeping the target velocity `noise - actions` unchanged.
+`outputs/train/e5_path_noise_005` is a 50k run with `path_noise_std=0.05`, otherwise the confirmed recipe
+(wandb [ab2hnfq7](https://wandb.ai/ameya555-ieee/lerobot/runs/ab2hnfq7)). The jitter scale is well-chosen,
+not too small: instrumenting the sampler, heun's predictor lands **0.028–0.047** (per-element RMS) off the
+true path at NFE10-equivalent steps, right where 0.05 covers.
+
+All e5 evals n=200, on the 50k checkpoint. Matched-NFE comparison against the euler-trained 175k checkpoint
+from the table above (different checkpoint — see the euler-vs-euler control below):
+
+| solver | NFE | e5 (path_noise 0.05) | euler-trained 175k | Δ | two-prop p |
+|---|---:|---:|---:|---:|---:|
+| euler | 10 | 52.0% [45.1, 58.9] | 73.5% | −21.5pp | <1e-4 |
+| heun | 10 | 4.0% [1.3, 6.7] | 7.0% | −3.0pp | 0.19 |
+| heun | 6 | 2.0% | 2.0% | 0.0pp | 1.0 |
+| rk4 | 12 | 23.0% [17.2, 28.8] | 29.0% | −6.0pp | 0.17 |
+| rk4 | 8 | 14.0% [9.2, 18.8] | 9.0% | +5.0pp | 0.12 |
+| rk4 | 4 | 1.0% | 1.5% | −0.5pp | 0.65 |
+
+**The hypothesis did not pan out.** Every heun/rk4 point is statistically indistinguishable from the
+euler-trained checkpoint (all p ≥ 0.12) — the jitter left higher-order solvers exactly on the floor. euler
+still dominates on the very same weights (52% vs. heun 4%, rk4@12 23%).
+
+**Worse, the jitter significantly degraded euler itself.** The clean control is euler-vs-euler at matched
+50k steps (the 175k comparison above is confounded by checkpoint): E4b 50k (`path_noise_std=0`) scored 69.0%
+[62.6, 75.4] vs. e5 50k (`path_noise_std=0.05`) at **52.0%** [45.1, 58.9] — a 17pp drop, z = −3.48,
+p = 0.0005. (E5's own in-training n=50 eval read 66%, but n=50 is too noisy; the n=200 number is 52%.)
+
+Why it fails, mechanistically: the correct off-path velocity is the *marginal* `E[noise − action | x_t]`,
+which differs from any single sample's `noise − action` once you leave that sample's own path. Jittering
+`x_t` while keeping this sample's target feeds the network a *biased* velocity at the jittered point, so it
+doesn't learn the true off-path field heun/rk4 need — it just blurs the on-path field toward locally
+constant, which slightly dulls euler's on-path precision (the 17pp cost) without supplying correct off-path
+velocities. Bottom line: **`path_noise_std` stays at its default 0.0; this route to higher-order solvers is
+a dead end as formulated.** A correct version would need the jittered point's own marginal target (e.g.
+mini-batch OT / a consistency-style objective), not the single-sample target — a much larger change, not
+pursued.
+
+e5 evals logged as `e5_{solver}_nfe{N}`: euler [xubwb1y2](https://wandb.ai/ameya555-ieee/lerobot/runs/xubwb1y2),
+heun@10 [ffkpgram](https://wandb.ai/ameya555-ieee/lerobot/runs/ffkpgram),
+rk4@12 [0xoyu6ni](https://wandb.ai/ameya555-ieee/lerobot/runs/0xoyu6ni) (others under the same prefix).
+
 ## Open items
 
 None of these block M4; all are cheap (eval-time) except where noted.
 
-- **`ode_solver` has never been benchmarked.** `ode_solvers.py` now ships `euler`/`heun`/`rk4`, but every
-  number in this document was produced with the default `euler`. Heun and RK4 cost 2x and 4x UNet forward
-  passes at equal `num_inference_steps`, so the fair comparison is at **matched NFE** (e.g. `heun` at 5 steps
-  vs. `euler` at 10), not at matched step count. Eval-time only, ~2.5 min per 200-episode run.
 - **Re-test `num_inference_steps` and the time-sampling distribution** on the fixed config. The 10-vs-100
   result below was measured on the old, broken-augmentation checkpoint and should not be assumed to carry
   over. A `{5, 8, 10, 15, 20, 30}` sweep is eval-time only; uniform-vs-Beta time sampling needs a 50k retrain

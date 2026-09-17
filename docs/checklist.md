@@ -126,9 +126,23 @@ all wandb links in `comparison_pusht.md`; summary of what changed and why:
       gain. Longer training shifts the *shape* of the failures rather than the rate: the 50k checkpoint
       has the highest `avg_max_reward` (0.971) and only 4/200 hard failures but 51 near-misses in
       [0.95, 1.0); 175k has 147 clean successes but 14 hard failures and `avg_max_reward` 0.928.
-- [ ] Benchmark `ode_solver` ∈ {euler, heun, rk4} (new `ode_solvers.py`) — every result to date uses the
-      default `euler`. Compare at **matched NFE** (heun@5 / rk4@2-3 vs. euler@10), not matched step count.
-      Eval-time only, ~2.5 min per 200-episode run.
+- [x] Benchmarked `ode_solver` ∈ {euler, heun, rk4} at **matched NFE** on the 175k checkpoint (n=200).
+      **euler dominates everywhere; default stays euler.** heun@NFE10 = 7.0% and rk4@NFE12 = 29.0% vs.
+      euler@NFE10 = 73.5% (p < 1e-10). Verified this is NOT a solver bug: (a) on a synthetic smooth field
+      both higher-order solvers are strictly more accurate than euler; (b) on the real policy heun converges
+      to euler as steps grow (num_steps 5/20/40 → 7/53/71%, vs euler@40 76%). The learned velocity field is
+      only reliable on the training manifold `x_t = t·noise+(1-t)·action`; higher-order solvers evaluate it
+      at off-path predicted points where it's unreliable. Full table + mechanism in `comparison_pusht.md`.
+      Evals under `outputs/eval/m4b_175k_*` / `outputs/eval/conv_*`, logged to wandb as
+      `m4b_175k_{solver}_nfe{N}` / `conv_*`.
+- [x] **E5 — off-path training jitter (`path_noise_std=0.05`) does NOT rescue higher-order solvers, and
+      hurts euler.** 50k run `e5_path_noise_005` (wandb `ab2hnfq7`), NFE-matched solver sweep n=200.
+      heun/rk4 stayed on the floor (heun@NFE10 4.0% vs euler-trained 7.0%, p=0.19; rk4@NFE12 23.0% vs
+      29.0%, p=0.17 — all matched-NFE comparisons n.s.). euler-vs-euler control at matched 50k steps:
+      E4b (std=0) 69.0% vs e5 (std=0.05) **52.0%**, p=0.0005 — the jitter cost ~17pp. Measured that 0.05
+      is well-scaled (heun probes 0.028–0.047 off-path), so "too small" is ruled out; the single-sample
+      target is biased off-path, blurring the field rather than teaching the true marginal velocity.
+      `path_noise_std` stays 0.0. Full writeup in `comparison_pusht.md`.
 - [ ] Re-test `num_inference_steps` and uniform-vs-Beta time sampling on the fixed config (the earlier
       10-vs-100 result was measured on the old, unaugmented checkpoint).
 
