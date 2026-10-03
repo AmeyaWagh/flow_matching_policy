@@ -26,6 +26,9 @@ from dataclasses import dataclass, field
 from lerobot.configs import NormalizationMode, PreTrainedConfig
 from lerobot.optim import AdamConfig, CosineDecayWithWarmupSchedulerConfig
 
+from .ode_solvers import ODE_SOLVERS
+from .time_samplers import TIME_SAMPLING_DISTRIBUTIONS
+
 
 @PreTrainedConfig.register_subclass("flow_matching")
 @dataclass
@@ -78,14 +81,31 @@ class FlowMatchingConfig(PreTrainedConfig):
         use_film_scale_modulation: FiLM (https://huggingface.co/papers/1709.07871) is used for the UNet
             conditioning. Bias modulation is used by default; this also enables scale modulation.
         gradient_checkpointing: Whether to checkpoint the UNet residual blocks during training.
-        num_inference_steps: Number of forward-Euler ODE steps to use at inference time.
+        num_inference_steps: Number of ODE solver steps to use at inference time.
+        ode_solver: Name of the fixed-step ODE solver used to integrate the learned velocity field from
+            t=1 (noise) to t=0 (actions) -- one of `ode_solvers.ODE_SOLVERS` ("euler", "heun", "rk4").
+            Higher-order solvers call the UNet more than once per step (2x for "heun", 4x for "rk4"), so
+            they cost proportionally more compute at equal `num_inference_steps`.
+        time_sampling_distribution: Name of the training-time timestep distribution -- one of
+            `time_samplers.TIME_SAMPLING_DISTRIBUTIONS` ("beta", "logit_normal"). "beta" samples close to
+            uniformly across `t`; "logit_normal" concentrates training mass near a tunable point (see
+            `time_sampling_logit_normal_mean`), e.g. near `t=0` (the target action) to sharpen the model's
+            precision for the final steps of ODE integration at inference time.
         time_sampling_alpha: Alpha parameter of the Beta(alpha, beta) distribution used to sample training
-            timesteps (openpi/pi0 convention).
+            timesteps (openpi/pi0 convention). Only used when `time_sampling_distribution="beta"`.
         time_sampling_beta: Beta parameter of the Beta(alpha, beta) distribution used to sample training
-            timesteps.
+            timesteps. Only used when `time_sampling_distribution="beta"`.
         time_sampling_scale: Scale applied to the Beta(alpha, beta) sample before adding
-            `time_sampling_offset`, so that `time ~ Beta(alpha, beta) * scale + offset`.
+            `time_sampling_offset`, so that `time ~ Beta(alpha, beta) * scale + offset`. Only used when
+            `time_sampling_distribution="beta"`.
         time_sampling_offset: Offset added after scaling; keeps `time` away from the exact 0/1 boundary.
+            Only used when `time_sampling_distribution="beta"`.
+        time_sampling_logit_normal_mean: Mean of the underlying Normal, pre-sigmoid. Negative values
+            concentrate sampled `t` toward 0 (the target action); positive values toward 1 (noise); 0
+            concentrates around `t=0.5`. Only used when `time_sampling_distribution="logit_normal"`.
+        time_sampling_logit_normal_std: Standard deviation of the underlying Normal, pre-sigmoid; larger
+            values spread `t` more widely around `sigmoid(time_sampling_logit_normal_mean)`. Only used
+            when `time_sampling_distribution="logit_normal"`.
         time_embed_scale: Multiplier applied to the continuous time `t in (0, 1)` before it is fed into the
             (reused, unmodified) `DiffusionSinusoidalPosEmb` embedding. That embedding was designed for
             integer diffusion timesteps in `[0, num_train_timesteps)`; without this scaling, its
@@ -120,7 +140,7 @@ class FlowMatchingConfig(PreTrainedConfig):
     # Inputs / output structure.
     n_obs_steps: int = 2
     horizon: int = 64
-    n_action_steps: int = 32
+    n_action_steps: int = 16
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -130,19 +150,36 @@ class FlowMatchingConfig(PreTrainedConfig):
         }
     )
 
-    # The original diffusion-policy implementation doesn't sample frames for the last 7 steps,
-    # which avoids excessive padding and leads to improved training results. Kept identical here.
-    drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
+    # Number of end-of-episode frames excluded as window *start* indices by lerobot's
+    # `EpisodeAwareSampler`, to avoid training on excessively padded action targets.
+    #
+    # Keep this at 7. It is NOT `horizon - n_action_steps - n_obs_steps + 1` (= 47 at the current
+    # defaults), despite what older comments here and in lerobot claimed: that formula dates from the
+    # original diffusion-policy config (horizon=16, n_action_steps=8, n_obs_steps=2 -> 7) and does not
+    # generalize to horizon=64. lerobot's own `DiffusionConfig` likewise still ships 7 alongside
+    # horizon=64 / n_action_steps=32.
+    #
+    # Measured, not assumed: a 50k-step run with 47 collapsed PushT rollout success to 2-10% (50 eps)
+    # while an otherwise-identical run with 7 reached 62% -- see `docs/comparison_pusht.md` (E4/E4b).
+    # With 47, ~40% of each ~125-frame PushT episode is removed from the sampler's start indices, so the
+    # terminal fine-alignment phase is only ever seen in chunk positions 17-64 and never in positions
+    # 0-15, which is the only slice receding-horizon execution ever runs. The symptom was a pile-up of
+    # episodes just below the success threshold (20/50 in max_reward [0.90, 0.95)) rather than an
+    # outright-broken policy.
+    drop_n_last_frames: int = 7
 
     # Architecture / modeling.
     # Vision backbone.
     vision_backbone: str = "resnet18"
     resize_shape: tuple[int, int] | None = None
     crop_ratio: float = 1.0
-    crop_shape: tuple[int, int] | None = None
+    crop_shape: tuple[int, int] | None = (84, 84)
     crop_is_random: bool = True
-    pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
-    use_group_norm: bool = False
+    # `use_group_norm=True` requires training the backbone from scratch (see `DiffusionRgbEncoder`):
+    # replacing BatchNorm with GroupNorm in a pretrained backbone would ruin its pretrained weights.
+    # `lerobot/diffusion_pusht` itself uses this combination (pretrained_backbone_weights=None).
+    pretrained_backbone_weights: str | None = None
+    use_group_norm: bool = True
     spatial_softmax_num_keypoints: int = 32
     use_separate_rgb_encoder_per_camera: bool = True
     # UNet.
@@ -155,10 +192,17 @@ class FlowMatchingConfig(PreTrainedConfig):
 
     # Flow matching.
     num_inference_steps: int = 10
+    ode_solver: str = "euler"
+    time_sampling_distribution: str = "beta"
     time_sampling_alpha: float = 1.5
     time_sampling_beta: float = 1.0
     time_sampling_scale: float = 0.999
     time_sampling_offset: float = 0.001
+    # Chosen to noticeably bias sampled t toward 0 (sigmoid(-1) ~= 0.27) without starving t near 1 (the
+    # inference-time starting point) of training signal entirely -- an experimental starting point, not a
+    # value validated the way time_sampling_alpha/beta's pi0 provenance is. See time_samplers.py.
+    time_sampling_logit_normal_mean: float = -1.0
+    time_sampling_logit_normal_std: float = 1.0
     time_embed_scale: float = 1000.0
 
     # Optimization
@@ -199,6 +243,13 @@ class FlowMatchingConfig(PreTrainedConfig):
             )
         if self.num_inference_steps < 1:
             raise ValueError(f"`num_inference_steps` must be >= 1. Got {self.num_inference_steps}.")
+        if self.ode_solver not in ODE_SOLVERS:
+            raise ValueError(f"`ode_solver` must be one of {sorted(ODE_SOLVERS)}. Got {self.ode_solver!r}.")
+        if self.time_sampling_distribution not in TIME_SAMPLING_DISTRIBUTIONS:
+            raise ValueError(
+                f"`time_sampling_distribution` must be one of {TIME_SAMPLING_DISTRIBUTIONS}. "
+                f"Got {self.time_sampling_distribution!r}."
+            )
         if self.trajectory_metrics_log_freq < 1:
             raise ValueError(
                 f"`trajectory_metrics_log_freq` must be >= 1. Got {self.trajectory_metrics_log_freq}."

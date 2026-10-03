@@ -26,6 +26,25 @@ Verify the setup:
 python -c "import torch, lerobot; print(torch.__version__, torch.cuda.is_available(), lerobot.__version__)"
 ```
 
+## PushT experiments
+
+![Flow Matching policy solving PushT](docs/media/pusht_success_175k.gif)
+
+*A successful rollout (episode 0 of the n=200 eval below) of the flow_matching policy pushing the T-block into the target zone.*
+
+The Flow Matching policy is benchmarked against the [`lerobot/diffusion_pusht`](https://huggingface.co/lerobot/diffusion_pusht) reference checkpoint at an equal training budget (200,000 steps, batch 64), with checkpoint selection matching the baseline's own methodology (best of periodic in-training rollout evals, not just the final step):
+
+| | Flow Matching (this policy, 175k-step checkpoint) | `diffusion_pusht` (published) |
+|---|---:|---:|
+| Success rate | **73.5%** (n=200, 95% CI [67.4, 79.6]) | 65.4% (n=500) |
+| Avg. max overlap ratio | 0.928 | 0.955 |
+| Training steps | 200,000 | 200,000 |
+| Inference steps per action chunk | 10 (forward-Euler ODE) | ~100 (DDPM) |
+
+Read this as **parity, with a possible modest edge, not a clearly-established win** (p ≈ 0.038 vs. the baseline's own published number, one comparison among several run during the investigation). The best-supported claim is on efficiency: the same success rate is reached with **10 ODE integration steps instead of ~100 DDPM steps**, and separately, **50,000 training steps already matches 200,000** (once a training-window configuration bug was fixed) — 4x less training compute for a statistically indistinguishable result.
+
+The trained checkpoint is published at [ameyawagh555/flow_matching_pusht](https://huggingface.co/ameyawagh555/flow_matching_pusht). The full investigation — including two config bugs that initially made this policy look roughly half as good as the baseline, and a benchmark of alternative ODE solvers (Heun, RK4) that found forward-Euler remains the best choice on this checkpoint — is written up in [`docs/comparison_pusht.md`](docs/comparison_pusht.md).
+
 ## Evaluate the pretrained diffusion_pusht baseline
 
 `lerobot/diffusion_pusht` predates lerobot's processor-pipeline normalization format, so it needs a
