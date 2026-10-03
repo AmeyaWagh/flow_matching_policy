@@ -165,7 +165,8 @@ formula is stale upstream too. The value is now pinned at 7 with this reasoning 
 
 `n_obs_steps=2`, `horizon=64`, `n_action_steps=16`, `drop_n_last_frames=7`, `crop_shape=(84,84)` with
 `crop_is_random=True`, `use_group_norm=True`, `pretrained_backbone_weights=None`, `down_dims=(512,1024,2048)`,
-`num_inference_steps=10`, `time_embed_scale=1000.0`, `time_sampling_alpha/beta=1.5/1.0`, batch 64, AdamW
+`num_inference_steps=10`, `time_embed_scale=1000.0`, `time_sampling_distribution="beta"` with
+`time_sampling_alpha/beta=1.5/1.0` (logit-normal tested and tied, not adopted -- see E6), batch 64, AdamW
 preset with cosine decay + 500 warmup steps, `ode_solver="euler"`. Train with:
 
 ```bash
@@ -272,18 +273,66 @@ e5 evals logged as `e5_{solver}_nfe{N}`: euler [xubwb1y2](https://wandb.ai/ameya
 heun@10 [ffkpgram](https://wandb.ai/ameya555-ieee/lerobot/runs/ffkpgram),
 rk4@12 [0xoyu6ni](https://wandb.ai/ameya555-ieee/lerobot/runs/0xoyu6ni) (others under the same prefix).
 
+## Time-sampling distribution: logit-normal ties beta, doesn't beat it (E6)
+
+Motivating hypothesis: PushT failures cluster as near-misses just below the success threshold (E4's "20 of
+50 episodes piled into `max_reward` ∈ [0.90, 0.95)"), suggesting the limiting factor is precision in the
+final, small-`t` refinement steps of ODE integration. `t ~ Beta(1.5, 1.0)` samples close to uniformly; a
+`t ~ logit-normal` distribution (`t = sigmoid(z)`, `z ~ N(mean, std)`) can instead concentrate training mass
+near a chosen point. `time_sampling_distribution="logit_normal"` with `mean=-1.0, std=1.0`
+(`sigmoid(-1) ≈ 0.27`) biases training `t` toward 0 -- the target action -- without starving `t` near 1
+(where inference starts) of signal entirely. Implementation: `time_samplers.py`, dispatched from
+`FlowMatchingModel.compute_loss` by `FlowMatchingConfig.time_sampling_distribution` (default remains
+`"beta"`, unchanged).
+
+50k-step run, otherwise the confirmed recipe, final checkpoint (matching E4b's own methodology -- not
+best-of-periodic, to avoid its upward-selection-bias caveat), evaluated at n=200:
+
+| | E6 (`logit_normal`, mean=-1.0) | E4b (`beta`, baseline) |
+|---|---:|---:|
+| `pc_success` | 68.0% (136/200) | 69.0% (138/200) |
+| 95% CI | [61.5, 74.5] | [62.6, 75.4] |
+| `avg_max_reward` | 0.929 | 0.971 |
+| Near-misses `[0.95, 1.0)` | 36/200 | -- |
+| Hard failures `<0.5` | 10/200 | -- |
+
+Two-proportion z-test: z = -0.215, **p = 0.83**. **No difference.** In-training n=50 evals told the same
+story before the n=200 confirmation: 52.0% @ 25k and 62.0% @ 50k -- numerically identical to E4b's own
+25k/50k trajectory at that resolution.
+
+```bash
+scripts/train_flow_matching.sh 50000 64 outputs/train/e6_logit_normal lerobot/pusht pusht -- \
+  --env_eval_freq=25000 --save_freq=25000 --eval.n_episodes=50 \
+  --policy.time_sampling_distribution=logit_normal
+scripts/eval_pretrained.sh outputs/train/e6_logit_normal/checkpoints/050000/pretrained_model pusht 200 \
+  outputs/eval/e6_logit_normal_50k_n200
+```
+wandb: [0572e6dk](https://wandb.ai/ameya555-ieee/lerobot/runs/0572e6dk) (training, 1h04m44s),
+[qisxn7si](https://wandb.ai/ameya555-ieee/lerobot/runs/qisxn7si) (eval, n=200).
+
+One data point, one `mean` value, so this doesn't rule out logit-normal time sampling generally -- only
+`mean=-1.0, std=1.0` specifically. Given the null result and that `mean=0` (SD3's own default, concentrating
+around `t=0.5` rather than `t=0`) is a different and untested bet, further sweeping wasn't pursued; `beta`
+stays the default. Worth noting given the `num_inference_steps=100` and off-path-jitter (E5) results above:
+this is the *third* attempt at fixing the near-miss/precision failure mode via the training or sampling
+process, and the third null or negative result. The near-misses may simply be an irreducible property of
+this architecture/task combination at this training budget, not a fixable artifact of the time-sampling or
+integration scheme.
+
 ## Open items
 
 None of these block M4; all are cheap (eval-time) except where noted.
 
-- **Re-test `num_inference_steps` and the time-sampling distribution** on the fixed config. The 10-vs-100
-  result below was measured on the old, broken-augmentation checkpoint and should not be assumed to carry
-  over. A `{5, 8, 10, 15, 20, 30}` sweep is eval-time only; uniform-vs-Beta time sampling needs a 50k retrain
-  (~1h05m, now cheap given that 50k is enough).
+- **`num_inference_steps` re-sweep on the fixed config.** The 10-vs-100 result earlier in this doc was
+  measured on the old, broken-augmentation checkpoint (pre-E1/E4) and should not be assumed to carry over,
+  though the solver-comparison table above (all on the *fixed* 175k checkpoint) already shows euler@5/@4
+  underperforming euler@10 in the same direction, which is weak supporting evidence it still holds. A
+  `{5, 8, 15, 20, 30}` sweep at n=200 would confirm; eval-time only, no retrain needed.
 - **Remaining headroom is split between near-misses and hard failures**, and the balance shifts with training
   length: the 50k checkpoint leaves 51/200 episodes in `max_reward` ∈ [0.95, 1.0) with only 4 hard failures;
   the 175k checkpoint has 29 near-misses but 14 hard failures. Whether those 14 are a distinct failure mode
   (e.g. specific initial block poses) hasn't been checked — the rollout videos are saved and would answer it.
+  Now a *repeated* pattern across E4b/E5/E6's 50k runs (36-51 near-misses each) -- see E6's closing note.
 - **`time_embed_scale` has still never been swept** — the default worked on the first try at every
   milestone, which is not the same as tuned.
 

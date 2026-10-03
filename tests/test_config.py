@@ -29,8 +29,11 @@ def test_field_defaults():
     assert config.diffusion_step_embed_dim == 128
     assert config.num_inference_steps == 10
     assert config.ode_solver == "euler"
+    assert config.time_sampling_distribution == "beta"
     assert config.time_sampling_alpha == 1.5
     assert config.time_sampling_beta == 1.0
+    assert config.time_sampling_logit_normal_mean == -1.0
+    assert config.time_sampling_logit_normal_std == 1.0
     assert config.time_embed_scale == 1000.0
 
 
@@ -93,6 +96,24 @@ def test_ode_solver_must_be_known():
     """__post_init__ rejects an ode_solver name not in ode_solvers.ODE_SOLVERS."""
     with pytest.raises(ValueError, match="ode_solver"):
         make_config(ode_solver="not_a_real_solver")
+
+
+def test_time_sampling_distribution_must_be_known():
+    """__post_init__ rejects a time_sampling_distribution not in time_samplers.TIME_SAMPLING_DISTRIBUTIONS."""
+    with pytest.raises(ValueError, match="time_sampling_distribution"):
+        make_config(time_sampling_distribution="not_a_real_distribution")
+
+
+def test_logit_normal_time_sampling_is_selectable():
+    """A config built with time_sampling_distribution="logit_normal" is valid and round-trips."""
+    config = make_config(
+        time_sampling_distribution="logit_normal",
+        time_sampling_logit_normal_mean=-2.0,
+        time_sampling_logit_normal_std=0.5,
+    )
+    assert config.time_sampling_distribution == "logit_normal"
+    assert config.time_sampling_logit_normal_mean == -2.0
+    assert config.time_sampling_logit_normal_std == 0.5
 
 
 def test_delta_indices():

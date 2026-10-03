@@ -36,6 +36,19 @@ def test_do_mask_loss_for_padding(policy: FlowMatchingPolicy, train_batch: dict[
     assert torch.isfinite(loss)
 
 
+def test_forward_with_logit_normal_time_sampling():
+    """forward() works end-to-end with time_sampling_distribution="logit_normal" selected."""
+    config = make_config(
+        time_sampling_distribution="logit_normal",
+        time_sampling_logit_normal_mean=-1.0,
+        time_sampling_logit_normal_std=1.0,
+    )
+    policy = FlowMatchingPolicy(config)
+    loss, _ = policy.forward(_batch_for(config))
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+
+
 def _batch_for(config: FlowMatchingConfig, batch_size: int = 4) -> dict[str, torch.Tensor]:
     """A synthetic training batch sized for the given config (mirrors the `train_batch` fixture)."""
     return {

@@ -30,7 +30,7 @@ import einops
 import torch
 import torch.nn.functional as F  # noqa: N812
 from lerobot.policies import PreTrainedPolicy
-from lerobot.policies.common.flow_matching import sample_noise, sample_time_beta
+from lerobot.policies.common.flow_matching import sample_noise
 from lerobot.policies.diffusion.modeling_diffusion import DiffusionConditionalUnet1d, DiffusionRgbEncoder
 from lerobot.policies.utils import get_device_from_parameters, get_dtype_from_parameters, populate_queues
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
@@ -39,6 +39,7 @@ from torch import Tensor, nn
 
 from .configuration_flow_matching import FlowMatchingConfig
 from .ode_solvers import integrate as integrate_ode
+from .time_samplers import sample_time
 
 
 class FlowMatchingPolicy(PreTrainedPolicy):
@@ -328,14 +329,7 @@ class FlowMatchingModel(nn.Module):
         actions = batch[ACTION]
         noise = sample_noise(actions.shape, actions.device)
         bsize = actions.shape[0]
-        time = sample_time_beta(
-            bsize,
-            actions.device,
-            alpha=self.config.time_sampling_alpha,
-            beta=self.config.time_sampling_beta,
-            scale=self.config.time_sampling_scale,
-            offset=self.config.time_sampling_offset,
-        )
+        time = sample_time(self.config.time_sampling_distribution, bsize, actions.device, self.config)
         t = time[:, None, None]
         noisy_trajectory = t * noise + (1 - t) * actions
         target_velocity = noise - actions
